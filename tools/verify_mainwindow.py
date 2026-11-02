@@ -37,9 +37,12 @@ def main() -> int:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--dry-run", action="store_true")
     mode.add_argument("--apply", action="store_true")
+    parser.add_argument("--output", type=Path, help="Evidence directory (relative to project or absolute)")
+    parser.add_argument("--skip-comparison", action="store_true", help="Skip the historical design comparison")
+    parser.add_argument("--extended", action="store_true", help="Also capture 125/200 percent DPI, English and dense results")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
-    output = root / "work/ui-redesign"
+    output = root / args.output if args.output else root / "work/ui-redesign"
     settings = Path(os.environ["APPDATA"]) / "DiskCleaner/DiskCleaner.ini"
     shots = [
         ("light", "light", "1486x1024", 0, True, "1"),
@@ -49,6 +52,14 @@ def main() -> int:
         ("empty", "light", "1080x680", 0, False, "1"),
         ("dpi150", "light", "1080x680", 0, True, "1.5"),
     ]
+    if args.extended:
+        shots += [
+            ("dpi125", "light", "1080x680", 0, True, "1.25"),
+            ("dpi200", "light", "1080x680", 0, True, "2"),
+            ("english", "light", "1080x680", 1, True, "1"),
+            ("project", "light", "1486x1024", 0, True, "1"),
+            ("files-compact", "light", "1080x680", 1, True, "1"),
+        ]
     if args.dry_run:
         print(f"Temporarily replace and finally restore: {settings}")
         print("Capture: " + ", ".join(name for name, *_ in shots))
@@ -65,10 +76,10 @@ def main() -> int:
             settings.write_text("[General]\nfilterscanresults=false\ntreemapDetail=3\n"
                                 "treemapClasses=false\ntreemapAllocated=true\n", encoding="utf-8")
             command = [str(root / "build/DiskCleaner.exe"), "-qwindowgeometry", geometry + "+0+0",
-                       "--theme", theme, "--lang", "zh_CN", "--tab", str(tab),
+                       "--theme", theme, "--lang", "en" if name == "english" else "zh_CN", "--tab", str(tab),
                        "--shot", str(output / f"{name}.png"), "--delay", "2000"]
             if scan:
-                command += ["--scan", str(root / "work/sample")]
+                command += ["--scan", str(root if name == "project" else root / "work/sample")]
             env["QT_SCALE_FACTOR"] = scale
             result = subprocess.run(command, cwd=root, env=env, shell=False, capture_output=True,
                                     text=True, encoding="utf-8", errors="replace", timeout=30)
@@ -83,7 +94,7 @@ def main() -> int:
             settings.unlink()
         print("Restored user settings.")
     reference = root / "work/ux-audit-2026-11-02/main-light-v1.png"
-    if reference.is_file():
+    if reference.is_file() and not args.skip_comparison:
         compare_images(reference, output / "light.png", output)
     diffs = []
     for baseline in sorted((output / "baseline").glob("*")):

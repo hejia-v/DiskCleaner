@@ -98,6 +98,7 @@ QHash<QString, QString> makeChinese()
         {"Detail: ", "层级："},
         {"Visible folder levels (Ctrl +/-)", "显示目录层数（Ctrl +/-）"},
         {"File classes", "文件分类配色"},
+        {"Chart options", "图表选项"},
         {"Zoom into folder", "进入目录"},
         {"Tag", "标签"},
         {"Red (1)", "红色（1）"},

@@ -1,0 +1,12 @@
+<RCC>
+  <qresource prefix="ui">
+    <file>chevron-down.svg</file>
+    <file>chevron-up.svg</file>
+    <file>chevron-right.svg</file>
+    <file>check.svg</file>
+    <file>check-ink.svg</file>
+    <file>minus.svg</file>
+    <file>dot.svg</file>
+    <file>close.svg</file>
+  </qresource>
+</RCC>

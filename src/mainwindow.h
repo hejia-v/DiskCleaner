@@ -12,6 +12,7 @@
 #include "liveupdate.h"
 
 class QComboBox;
+class QToolButton;
 class QPushButton;
 class QProgressBar;
 class QLabel;
@@ -195,7 +196,7 @@ private:
     QSplitter* treeSplit_ = nullptr;
     QTableView* extView_ = nullptr;
     QLabel* pathLabel_ = nullptr;
-    QLabel* treemapPath_ = nullptr;
+    QToolButton* treemapPath_ = nullptr;
     QTimer* searchTimer_ = nullptr;
     QTimer* extTimer_ = nullptr;
     DeletionWatcher* deletionWatcher_ = nullptr;

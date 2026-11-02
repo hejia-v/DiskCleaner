@@ -246,17 +246,17 @@ QColor TreemapWidget::nodeColor(uint32_t node) const
             QStringLiteral("zip;7zip;rar;iso").split(';'),
             QStringLiteral("jpg;jpeg;gif;png;tif;tiff;nef;raw;rw2;cr2;bmp;psd").split(';'),
             QStringLiteral("mp2;mp3;wav;ogg;aif;alp;au;3gp;ac3;amr;aac;m4a;wma;aiff;flac;voc").split(';')};
-        static const QColor colors[] = {QColor(248, 167, 170), QColor(250, 215, 130),
-                                         QColor(163, 182, 245), QColor(138, 220, 193), QColor(210, 177, 242)};
+        static const QColor colors[] = {QColor("#dfb9b1"), QColor("#e3d2a7"),
+                                         QColor("#bec8e2"), QColor("#b3d1c5"), QColor("#cfc2dd")};
         for (int i = 0; i < 5; ++i)
             if (classes[i].contains(ext)) return colors[i];
     } else if (!colors_.isEmpty()) return colors_[qHash(ext) % colors_.size()];
     uint32_t branch = node;
     while (tree_->nodes[branch].parent != wt::kNone && tree_->nodes[branch].parent != root_)
         branch = tree_->nodes[branch].parent;
-    static const QColor colors[] = {QColor(196, 179, 244), QColor(146, 222, 209),
-                                    QColor(148, 204, 249), QColor(250, 214, 143),
-                                    QColor(165, 199, 236), QColor(237, 182, 207)};
+    static const QColor colors[] = {QColor("#c9c0dc"), QColor("#b5d2c9"),
+                                    QColor("#b9cce0"), QColor("#e2d1af"),
+                                    QColor("#c2cbe0"), QColor("#ddc0c6")};
     return colors[qHash(tree_->name(branch)) % std::size(colors)];
 }
 QVector<TreemapWidget::Cell> TreemapWidget::buildCells(const QSizeF& size, bool showFree) const
@@ -312,7 +312,7 @@ QVector<TreemapWidget::Cell> TreemapWidget::buildCells(const QSizeF& size, bool 
                 space.bytes = quint64(items[i].area);
                 space.space = items[i].space == 1 ? Space::Free : Space::Unknown;
                 space.depth = depth + 1;
-                space.color = items[i].space == 1 ? QColor(72, 153, 86) : QColor(150, 150, 150);
+                space.color = items[i].space == 1 ? QColor("#bbd3b9") : QColor("#d2d1c9");
                 cells.push_back(space);
             } else layout(items[i].node, childRect, depth + 1);
         }
@@ -345,7 +345,7 @@ void TreemapWidget::drawCells(QPainter& painter, const QVector<Cell>& cells, con
     for (int i = 0; i < cells.size(); ++i) {
         const Cell& cell = cells[i];
         QColor color = gray(cell.color);
-        if (interactive && i == hovered_) color = color.lighter(118);
+        if (interactive && i == hovered_) color = color.lighter(106);
         painter.fillRect(cell.rect, color);
         painter.setPen(gray(palette().color(QPalette::Base)));
         painter.drawRect(cell.rect.adjusted(0, 0, -1, -1));
@@ -358,17 +358,22 @@ void TreemapWidget::drawCells(QPainter& painter, const QVector<Cell>& cells, con
             painter.drawRect(QRectF(cell.rect.x() + 3, cell.rect.y() + 3, 8, 8));
         }
         if (!showNames_ || cell.labelRect.width() < 26 || cell.labelRect.height() < 12) continue;
-        const QString name = cell.space == Space::Free ? tr("Free space")
+        QString name = cell.space == Space::Free ? tr("Free space")
                              : cell.space == Space::Unknown ? tr("Unknown space") : tree_->name(cell.node);
+        // The full path remains in the navigation tooltip; don't repeat it across the chart.
+        if (cell.node == root_ && name.size() > 3) {
+            const auto separator = std::max(name.lastIndexOf(QLatin1Char('\\')), name.lastIndexOf(QLatin1Char('/')));
+            if (separator >= 0 && separator + 1 < name.size()) name = name.mid(separator + 1);
+        }
         const QString bytes = wt::formatSize(cell.bytes, unit_, 1);
         QRectF textRect = cell.labelRect;
         if (cell.tag) textRect.adjust(12, 0, 0, 0);
-        painter.setPen(qGray(color.rgb()) < 110 ? Qt::white : gray(QColor(24, 42, 62)));
+        painter.setPen(qGray(color.rgb()) < 110 ? Qt::white : gray(QColor("#30332f")));
         painter.save();
         painter.setClipRect(textRect);
         if (cell.expanded) {
             painter.drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter,
-                             metrics.elidedText(name + QStringLiteral(" - ") + bytes,
+                             metrics.elidedText(name + QStringLiteral(" · ") + bytes,
                                                 Qt::ElideMiddle, int(textRect.width())));
         } else {
             const QString title = metrics.elidedText(name, Qt::ElideMiddle, int(textRect.width()));

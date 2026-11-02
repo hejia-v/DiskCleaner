@@ -63,6 +63,7 @@
 #include <QTimer>
 #include <QTreeView>
 #include <QVBoxLayout>
+#include <QWidgetAction>
 #include <algorithm>
 #include <map>
 #include <memory>
@@ -76,6 +77,22 @@
 #include "treemap.h"
 
 namespace {
+
+void addClearAction(QLineEdit* edit)
+{
+    auto* action = edit->addAction(appIcon(AppIcon::Close), QLineEdit::TrailingPosition);
+    action->setText(QCoreApplication::translate("MainWindow", "Clear"));
+    action->setVisible(!edit->text().isEmpty());
+    QObject::connect(edit, &QLineEdit::textChanged, action, [action](const QString& text) {
+        action->setVisible(!text.isEmpty());
+    });
+    QObject::connect(action, &QAction::triggered, edit, [edit] {
+        edit->clear();
+        // This user action must also reach filters listening for textEdited.
+        emit edit->textEdited(edit->text());
+        edit->setFocus();
+    });
+}
 
 QString driveLabel(wchar_t letter)
 {
@@ -123,8 +140,8 @@ public:
         style->drawControl(QStyle::CE_ItemViewItem, &background, painter, option.widget);
         const double ratio = std::clamp(index.data(Qt::UserRole + 1).toDouble(), 0.0, 1.0);
         QRect track = option.rect.adjusted(10, 0, -66, 0);
-        track.setTop(option.rect.center().y() - 5);
-        track.setHeight(10);
+        track.setTop(option.rect.center().y() - 3);
+        track.setHeight(6);
         painter->save();
         painter->setPen(Qt::NoPen);
         painter->setBrush(option.palette.color(QPalette::AlternateBase));
@@ -219,7 +236,7 @@ void MainWindow::buildUi()
     };
     auto* modeHint = new QToolButton(central);
     modeHint->setText(wt::isProcessElevated() ? tr("Fast scan available") : tr("Standard scan mode"));
-    modeHint->setIcon(style()->standardIcon(QStyle::SP_MessageBoxInformation));
+    modeHint->setIcon(appIcon(AppIcon::Info));
     modeHint->setToolButtonStyle(Qt::ToolButtonIconOnly);
     modeHint->setAccessibleName(modeHint->text());
     modeHint->setToolTip(tr("Administrator rights allow faster NTFS drive scans. Folder scans work without them."));
@@ -231,17 +248,23 @@ void MainWindow::buildUi()
     modeHint->setPopupMode(QToolButton::InstantPopup);
     auto* top = new QHBoxLayout();
     top->setSpacing(6);
-    diskSourceBtn_ = new QPushButton(style()->standardIcon(QStyle::SP_DriveHDIcon), tr("Drive"), central);
-    folderSourceBtn_ = new QPushButton(style()->standardIcon(QStyle::SP_DirIcon), tr("Folder"), central);
+    diskSourceBtn_ = new QPushButton(appIcon(AppIcon::Drive), tr("Drive"), central);
+    folderSourceBtn_ = new QPushButton(appIcon(AppIcon::Folder), tr("Folder"), central);
     diskSourceBtn_->setObjectName(QStringLiteral("diskSource"));
     folderSourceBtn_->setObjectName(QStringLiteral("folderSource"));
     auto* sourceGroup = new QButtonGroup(central);
+    auto* sourceSegment = new QFrame(central);
+    sourceSegment->setProperty("segmentGroup", true);
+    auto* sourceLayout = new QHBoxLayout(sourceSegment);
+    sourceLayout->setContentsMargins(2, 2, 2, 2);
+    sourceLayout->setSpacing(2);
     for (auto* button : {diskSourceBtn_, folderSourceBtn_}) {
         button->setCheckable(true);
         button->setProperty("segment", true);
         sourceGroup->addButton(button);
-        top->addWidget(button);
+        sourceLayout->addWidget(button);
     }
+    top->addWidget(sourceSegment);
     driveBox_ = new QComboBox(central);
     driveBox_->setObjectName(QStringLiteral("scanDrive"));
     driveBox_->setMinimumWidth(220);
@@ -249,12 +272,13 @@ void MainWindow::buildUi()
     scanPathEdit_ = new QLineEdit(central);
     scanPathEdit_->setObjectName(QStringLiteral("scanPath"));
     scanPathEdit_->setPlaceholderText(tr("Choose or enter a folder path"));
-    scanPathEdit_->setClearButtonEnabled(true);
+    addClearAction(scanPathEdit_);
     top->addWidget(scanPathEdit_, 1);
     browseBtn_ = new QPushButton(tr("Choose folder..."), central);
     browseBtn_->setObjectName(QStringLiteral("browseFolder"));
+    browseBtn_->setProperty("quiet", true);
     top->addWidget(browseBtn_);
-    scanBtn_ = new QPushButton(style()->standardIcon(QStyle::SP_MediaPlay), tr("Start scan"), central);
+    scanBtn_ = new QPushButton(appIcon(AppIcon::Play, true), tr("Start scan"), central);
     scanBtn_->setObjectName(QStringLiteral("startScan"));
     scanBtn_->setProperty("primary", true);
     scanBtn_->setMinimumWidth(100);
@@ -335,6 +359,7 @@ void MainWindow::buildUi()
     setScanSource(false);
 
     filterBar_ = new QFrame(central);
+    filterBar_->setProperty("panel", true);
     filterBar_->setFrameShape(QFrame::StyledPanel);
     auto* fl = new QHBoxLayout(filterBar_);
     fl->setContentsMargins(4, 2, 4, 2);
@@ -376,21 +401,28 @@ void MainWindow::buildUi()
     logicalMetricBtn_->setObjectName(QStringLiteral("logicalMetric"));
     allocatedMetricBtn_->setObjectName(QStringLiteral("allocatedMetric"));
     auto* metricGroup = new QButtonGroup(viewTools);
+    auto* metricSegment = new QFrame(viewTools);
+    metricSegment->setProperty("segmentGroup", true);
+    auto* metricLayout = new QHBoxLayout(metricSegment);
+    metricLayout->setContentsMargins(2, 2, 2, 2);
+    metricLayout->setSpacing(2);
     for (auto* button : {logicalMetricBtn_, allocatedMetricBtn_}) {
         button->setCheckable(true);
         button->setProperty("segment", true);
         metricGroup->addButton(button);
-        viewToolsLayout->addWidget(button);
+        metricLayout->addWidget(button);
     }
+    viewToolsLayout->addWidget(metricSegment);
     allocatedMetricBtn_->setChecked(true);
     connect(logicalMetricBtn_, &QPushButton::clicked, this, [this] { setSizeMetric(false); });
     connect(allocatedMetricBtn_, &QPushButton::clicked, this, [this] { setSizeMetric(true); });
     auto* metricHelp = new QToolButton(viewTools);
-    metricHelp->setIcon(style()->standardIcon(QStyle::SP_MessageBoxQuestion));
+    metricHelp->setIcon(appIcon(AppIcon::Help));
     metricHelp->setAccessibleName(tr("About size metrics"));
     metricHelp->setToolTip(tr("Lists and treemap use the same size metric. Percentages in lists are relative to the displayed scan; zooming the treemap only changes the area being viewed."));
     viewToolsLayout->addWidget(metricHelp);
     auto* typesButton = new QPushButton(tr("File types"), viewTools);
+    typesButton->setObjectName(QStringLiteral("fileTypesButton"));
     typesButton->setToolTip(tr("File types for the selected item; percentages use the scan range."));
     typesButton->setCheckable(true);
     viewToolsLayout->addWidget(typesButton);
@@ -414,7 +446,8 @@ void MainWindow::buildUi()
     auto* directorySearch = new QLineEdit(directoryPanel);
     directorySearch->setObjectName(QStringLiteral("directorySearch"));
     directorySearch->setPlaceholderText(tr("Filter files or folders"));
-    directorySearch->setClearButtonEnabled(true);
+    addClearAction(directorySearch);
+    directorySearch->addAction(appIcon(AppIcon::Search), QLineEdit::LeadingPosition);
     directorySearch->setMaximumWidth(250);
     directoryHeading->addWidget(directorySearch, 1);
     directoryLayout->addLayout(directoryHeading);
@@ -458,16 +491,16 @@ void MainWindow::buildUi()
     chartHeading->addWidget(treemapSummary_, 1);
     tpLayout->addLayout(chartHeading);
     auto* tpBar = new QHBoxLayout();
-    auto* backBtn = new QPushButton(style()->standardIcon(QStyle::SP_ArrowBack), {}, treemapPanel);
-    auto* forwardBtn = new QPushButton(style()->standardIcon(QStyle::SP_ArrowForward), {}, treemapPanel);
-    auto* homeBtn = new QPushButton(style()->standardIcon(QStyle::SP_DirHomeIcon), {}, treemapPanel);
+    auto* backBtn = new QPushButton(appIcon(AppIcon::Back), {}, treemapPanel);
+    auto* forwardBtn = new QPushButton(appIcon(AppIcon::Forward), {}, treemapPanel);
+    auto* homeBtn = new QPushButton(appIcon(AppIcon::Home), {}, treemapPanel);
     backBtn->setFixedWidth(32);
     forwardBtn->setFixedWidth(32);
     homeBtn->setFixedWidth(32);
     backBtn->setToolTip(tr("Back (Backspace)"));
     forwardBtn->setToolTip(tr("Forward (Shift+Backspace)"));
     homeBtn->setToolTip(tr("Scan root (Ctrl+Home)"));
-    auto* upBtn = new QPushButton(style()->standardIcon(QStyle::SP_ArrowUp), {}, treemapPanel);
+    auto* upBtn = new QPushButton(appIcon(AppIcon::Up), {}, treemapPanel);
     upBtn->setFixedWidth(32);
     upBtn->setToolTip(tr("Up one level"));
     for (auto* button : {backBtn, forwardBtn, upBtn, homeBtn})
@@ -476,28 +509,92 @@ void MainWindow::buildUi()
         button->setProperty("iconOnly", true);
         button->setFixedSize(26, 26);
     }
-    treemapPath_ = new QLabel(treemapPanel);
+    treemapPath_ = new QToolButton(treemapPanel);
+    treemapPath_->setObjectName(QStringLiteral("treemapPath"));
+    treemapPath_->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    treemapPath_->setPopupMode(QToolButton::InstantPopup);
+    auto* pathMenu = new QMenu(treemapPath_);
+    treemapPath_->setMenu(pathMenu);
+    connect(pathMenu, &QMenu::aboutToShow, this, [this, pathMenu] {
+        pathMenu->clear();
+        auto* tree = displayTree();
+        if (!tree || treemap_->root() >= tree->nodes.size()) return;
+        QList<uint32_t> ancestors;
+        for (auto node = treemap_->root(); node < tree->nodes.size(); node = tree->nodes[node].parent) {
+            ancestors.prepend(node);
+            if (node == tree->root || ancestors.size() >= 512) break;
+        }
+        for (auto node : ancestors) {
+            const auto path = tree->path(node);
+            auto* action = pathMenu->addAction(appIcon(AppIcon::Folder), tree->name(node));
+            action->setToolTip(path);
+            action->setCheckable(true);
+            action->setChecked(node == treemap_->root());
+            connect(action, &QAction::triggered, this, [this, path] {
+                // Live updates may compact node IDs while the menu is open.
+                auto* current = displayTree();
+                if (!current) return;
+                auto n = treemap_->root();
+                for (int depth = 0; depth < 512 && n < current->nodes.size(); ++depth) {
+                    if (current->path(n) == path) {
+                        treemap_->setRoot(n);
+                        break;
+                    }
+                    if (n == current->root) break;
+                    n = current->nodes[n].parent;
+                }
+            });
+        }
+        pathMenu->addSeparator();
+        const auto path = tree->path(treemap_->root());
+        connect(pathMenu->addAction(appIcon(AppIcon::Copy), tr("Copy Path")), &QAction::triggered,
+                this, [path] { QApplication::clipboard()->setText(path); });
+    });
     treemapPath_->setMinimumWidth(40);
-    treemapPath_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    treemapPath_->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Preferred);
     tpBar->addWidget(backBtn);
     tpBar->addWidget(forwardBtn);
     tpBar->addWidget(upBtn);
     tpBar->addWidget(homeBtn);
-    tpBar->addWidget(treemapPath_, 1);
-    auto* detail = new QSpinBox(treemapPanel);
+    tpBar->addWidget(treemapPath_);
+    tpBar->addStretch(1);
+    auto* chartOptions = new QToolButton(treemapPanel);
+    chartOptions->setObjectName(QStringLiteral("chartOptions"));
+    chartOptions->setIcon(appIcon(AppIcon::Settings));
+    chartOptions->setText(tr("Chart options"));
+    chartOptions->setAccessibleName(chartOptions->text());
+    chartOptions->setPopupMode(QToolButton::InstantPopup);
+    auto* optionsMenu = new QMenu(chartOptions);
+    auto* optionsAction = new QWidgetAction(optionsMenu);
+    auto* optionsPanel = new QWidget(optionsMenu);
+    auto* chartControls = new QVBoxLayout(optionsPanel);
+    chartControls->setContentsMargins(10, 8, 10, 8);
+    chartControls->setSpacing(6);
+    chartControls->addWidget(heading(tr("Chart options"), optionsPanel));
+    auto* detail = new QSpinBox(optionsPanel);
     detail->setObjectName(QStringLiteral("treemapDetail"));
     detail->setRange(1, 15);
     detail->setValue(settings_.value(QStringLiteral("treemapDetail"), 3).toInt());
     detail->setPrefix(tr("Detail: "));
     detail->setToolTip(tr("Visible folder levels (Ctrl +/-)"));
     treemap_->setDetailLevel(detail->value());
-    auto* chartControls = new QHBoxLayout();
     chartControls->addWidget(detail);
-    auto* classes = new QCheckBox(tr("File classes"), treemapPanel);
+    auto* classes = new QCheckBox(tr("File classes"), optionsPanel);
     classes->setChecked(settings_.value(QStringLiteral("treemapClasses"), false).toBool());
     treemap_->setFileClassesStyle(classes->isChecked());
     chartControls->addWidget(classes);
-    chartControls->addStretch();
+    optionsAction->setDefaultWidget(optionsPanel);
+    optionsMenu->addAction(optionsAction);
+    chartOptions->setMenu(optionsMenu);
+    chartHeading->addWidget(chartOptions);
+    const auto updateOptionsHint = [this, chartOptions] {
+        chartOptions->setToolTip(tr("Chart options") + QStringLiteral(" · ")
+            + tr("Detail: ") + QString::number(treemap_->detailLevel())
+            + (treemap_->fileClassesStyle() ? QStringLiteral(" · ") + tr("File classes") : QString()));
+    };
+    connect(treemap_, &TreemapWidget::detailLevelChanged, chartOptions, updateOptionsHint);
+    connect(treemap_, &TreemapWidget::fileClassesStyleChanged, chartOptions, updateOptionsHint);
+    updateOptionsHint();
     connect(detail, &QSpinBox::valueChanged, treemap_, &TreemapWidget::setDetailLevel);
     connect(treemap_, &TreemapWidget::detailLevelChanged, detail, &QSpinBox::setValue);
     connect(treemap_, &TreemapWidget::detailLevelChanged, this, [this](int level) {
@@ -510,7 +607,6 @@ void MainWindow::buildUi()
     });
     tpLayout->addLayout(tpBar);
     tpLayout->addWidget(treemap_, 1);
-    tpLayout->addLayout(chartControls);
     connect(upBtn, &QPushButton::clicked, this, &MainWindow::treemapUp);
     connect(backBtn, &QPushButton::clicked, treemap_, &TreemapWidget::goBack);
     connect(forwardBtn, &QPushButton::clicked, treemap_, &TreemapWidget::goForward);
@@ -537,6 +633,7 @@ void MainWindow::buildUi()
     extView_->setSelectionBehavior(QAbstractItemView::SelectRows);
     extView_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     extView_->setAlternatingRowColors(true);
+    extView_->setShowGrid(false);
     extView_->verticalHeader()->setVisible(false);
     extView_->horizontalHeader()->setStretchLastSection(true);
     typesDock_->setWidget(extView_);
@@ -556,6 +653,8 @@ void MainWindow::buildUi()
     searchRow->addWidget(new QLabel(tr("Filter:"), filesPage));
     searchEdit_ = new QLineEdit(filesPage);
     searchEdit_->setPlaceholderText(tr("Match file name"));
+    addClearAction(searchEdit_);
+    searchEdit_->addAction(appIcon(AppIcon::Search), QLineEdit::LeadingPosition);
     searchRow->addWidget(searchEdit_, 1);
     showFoldersBox_ = new QCheckBox(tr("Folders"), filesPage);
     searchRow->addWidget(showFoldersBox_);
@@ -581,6 +680,7 @@ void MainWindow::buildUi()
     fileView_->setSelectionBehavior(QAbstractItemView::SelectRows);
     fileView_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     fileView_->setAlternatingRowColors(true);
+    fileView_->setShowGrid(false);
     fileView_->verticalHeader()->setVisible(false);
     fileView_->horizontalHeader()->setStretchLastSection(true);
     fileView_->setSortingEnabled(true);
@@ -610,8 +710,10 @@ void MainWindow::buildUi()
     pathLabel_ = new QLabel(selectionBar);
     pathLabel_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     selectionLayout->addWidget(pathLabel_, 1);
-    exploreBtn_ = new QPushButton(style()->standardIcon(QStyle::SP_DirOpenIcon), tr("Explore Folder"), selectionBar);
-    copyPathBtn_ = new QPushButton(style()->standardIcon(QStyle::SP_FileDialogContentsView), tr("Copy Path"), selectionBar);
+    exploreBtn_ = new QPushButton(appIcon(AppIcon::Folder), tr("Explore Folder"), selectionBar);
+    copyPathBtn_ = new QPushButton(appIcon(AppIcon::Copy), tr("Copy Path"), selectionBar);
+    exploreBtn_->setProperty("quiet", true);
+    copyPathBtn_->setProperty("quiet", true);
     selectionLayout->addWidget(exploreBtn_);
     selectionLayout->addWidget(copyPathBtn_);
     const auto withSelection = [this](const std::function<void()>& action) {
@@ -1603,7 +1705,13 @@ void MainWindow::exportCsv()
     }
     QDialog dlg(this);
     dlg.setWindowTitle(tr("Export"));
+    dlg.setObjectName(QStringLiteral("exportOptionsDialog"));
     auto* form = new QFormLayout(&dlg);
+    form->setContentsMargins(18, 16, 18, 16);
+    form->setVerticalSpacing(8);
+    auto* title = new QLabel(tr("Export"), &dlg);
+    title->setProperty("heading", true);
+    form->addRow(title);
     auto* files = new QCheckBox(tr("Export Files"), &dlg);
     files->setChecked(true);
     auto* folders = new QCheckBox(tr("Export Folders"), &dlg);
@@ -1634,6 +1742,7 @@ void MainWindow::exportCsv()
     form->addRow(tr("Max folder depth (0 = no limit):"), depth);
 
     auto* bb = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dlg);
+    bb->button(QDialogButtonBox::Save)->setDefault(true);
     connect(bb, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
     connect(bb, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
     form->addRow(bb);
@@ -1678,7 +1787,10 @@ void MainWindow::exportTreemapPng()
     }
     QDialog dlg(this);
     dlg.setWindowTitle(tr("Save Treemap Image as .png file"));
+    dlg.setObjectName(QStringLiteral("imageExportDialog"));
     auto* form = new QFormLayout(&dlg);
+    form->setContentsMargins(18, 16, 18, 16);
+    form->setVerticalSpacing(8);
     auto* width = new QSpinBox(&dlg);
     width->setRange(1, 30000);
     width->setValue(settings_.value(QStringLiteral("treemapW"), 1920).toInt());
@@ -1691,7 +1803,8 @@ void MainWindow::exportTreemapPng()
     wl->setContentsMargins(0, 0, 0, 0);
     wl->addWidget(width, 1);
     auto* preset = new QToolButton(wrow);
-    preset->setText(QStringLiteral("..."));
+    preset->setIcon(appIcon(AppIcon::Settings));
+    preset->setAccessibleName(tr("Save Treemap Image"));
     auto* pmenu = new QMenu(preset);
     const int presets[][2] = {{1024, 768},  {1280, 720},  {1680, 1050}, {1920, 1080},
                               {2560, 1440}, {3840, 2160}, {7680, 4320}};
@@ -1716,6 +1829,7 @@ void MainWindow::exportTreemapPng()
     form->addRow(gray);
     form->addRow(freeBox);
     auto* bb = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dlg);
+    bb->button(QDialogButtonBox::Save)->setDefault(true);
     connect(bb, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
     connect(bb, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
     form->addRow(bb);
@@ -2227,14 +2341,27 @@ void MainWindow::updateTreemapBreadcrumb()
     if (!treemapPath_) return;
     wt::Tree* t = displayTree();
     if (!t || treemap_->root() >= t->nodes.size()) {
-        treemapPath_->clear();
+        treemapPath_->setText({});
+        treemapPath_->setEnabled(false);
         treemapSummary_->setText(tr("No scan results yet"));
         return;
     }
     const auto node = treemap_->root();
     const QString path = t->path(node);
-    treemapPath_->setText(QFontMetrics(treemapPath_->font()).elidedText(path, Qt::ElideMiddle,
-                                                                      std::max(80, treemapPath_->width())));
+    QStringList crumbs;
+    auto ancestor = node;
+    for (int i = 0; i < 3 && ancestor < t->nodes.size(); ++i) {
+        QString name = t->name(ancestor);
+        if (name.contains(QLatin1Char('\\')) && name.size() > 3)
+            name = QFileInfo(name).fileName();
+        crumbs.prepend(QFontMetrics(treemapPath_->font()).elidedText(name, Qt::ElideMiddle, 100));
+        if (ancestor == t->root) break;
+        ancestor = t->nodes[ancestor].parent;
+        if (i == 2) crumbs.prepend(QStringLiteral("…"));
+    }
+    treemapPath_->setText(crumbs.join(QStringLiteral("  ›  ")));
+    treemapPath_->setEnabled(true);
+    treemapPath_->setAccessibleName(path);
     treemapPath_->setToolTip(path);
     treemapSummary_->setText(QStringLiteral("%1 · %2")
         .arg(showAllocated_ ? tr("Space on disk") : tr("File size"),
@@ -2403,8 +2530,11 @@ void MainWindow::selectMultiple()
 {
     QDialog dlg(this);
     dlg.setWindowTitle(tr("Select Multiple"));
+    dlg.setObjectName(QStringLiteral("multipleLocationsDialog"));
     dlg.resize(540, 380);
     auto* layout = new QVBoxLayout(&dlg);
+    layout->setContentsMargins(18, 16, 18, 16);
+    layout->setSpacing(10);
     auto* list = new QListWidget(&dlg);
     auto addItem = [&](const QString& text, const QString& path, bool checked) {
         auto* it = new QListWidgetItem(text, list);
@@ -2446,6 +2576,7 @@ void MainWindow::selectMultiple()
     });
 
     auto* bb = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+    bb->button(QDialogButtonBox::Ok)->setDefault(true);
     connect(bb, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
     connect(bb, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
     layout->addWidget(bb);

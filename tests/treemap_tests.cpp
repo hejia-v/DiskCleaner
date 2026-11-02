@@ -9,6 +9,8 @@
 #include <QMenu>
 #include <QClipboard>
 #include <QPushButton>
+#include <QToolButton>
+#include <QSpinBox>
 #include <QLabel>
 #include <QComboBox>
 #include <QHeaderView>
@@ -701,6 +703,29 @@ private slots:
             const QString expected = QStringLiteral("%1 %").arg(100.0 * double(bytes) / double(whole), 0, 'f', 1);
             QCOMPARE(model->data(model->indexForNode(tiny).siblingAtColumn(1), Qt::DisplayRole).toString(), expected);
         }
+        // Modern navigation must still drive the existing tree and selection models.
+        window.setTabIndex(0);
+        widget->setRoot(tree->nodes[tiny].parent);
+        auto* breadcrumb = window.findChild<QToolButton*>("treemapPath");
+        QVERIFY(breadcrumb && breadcrumb->menu());
+        QVERIFY(QMetaObject::invokeMethod(breadcrumb->menu(), "aboutToShow"));
+        QVERIFY(breadcrumb->menu()->actions().size() >= 2);
+        breadcrumb->menu()->actions().first()->trigger();
+        QCOMPARE(widget->root(), root);
+        QCOMPARE(model->nodeOf(view->currentIndex()), root);
+        auto* options = window.findChild<QToolButton*>("chartOptions");
+        QVERIFY(options && options->menu());
+        auto* detail = window.findChild<QSpinBox*>("treemapDetail");
+        detail->setValue(4);
+        QCOMPARE(widget->detailLevel(), 4);
+        widget->setDetailLevel(2);
+        QCOMPARE(detail->value(), 2);
+        window.applyFilterFromCli("tiny", false);
+        auto* search = window.findChild<QLineEdit*>("directorySearch");
+        QVERIFY(!search->text().isEmpty());
+        search->actions().first()->trigger(); // trailing clear action, before the search icon
+        QTRY_COMPARE(model->tree()->nodes[model->tree()->root].size, uint64_t(9001));
+        QVERIFY(window.findChild<QLineEdit*>("filterInclude")->text().isEmpty());
         window.applyFilterFromCli("tiny", false);
         tree = model->tree();
         QCOMPARE(window.findChild<QLabel*>("scanSize")->text(), wt::formatSize(tree->nodes[tree->root].alloc, wt::UnitMode::Dynamic, 1));

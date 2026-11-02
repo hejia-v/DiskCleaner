@@ -2,9 +2,16 @@
 
 本目录包含 C++20 + Qt 6 程序、测试和构建配置。
 
+界面采用紧凑的浅色工作台样式：暖白背景、炭黑主操作、统一线性图标和分段选择。
+空间图导航支持从路径菜单返回上级目录；层级与分类配色位于图表右上角的选项中。
+主题覆盖列表、表单、下拉菜单、滚动条及业务弹窗，原有深色主题继续可用。
+详细设计与验证见 `docs/modern-light-ui-plan.md` 和 `docs/modern-light-ui-validation.md`。
+
 ## 构建与运行
 
 本机使用 Qt 6.11.2、MinGW 13.1、CMake 和 Ninja：
+
+Qt 组件需要 Widgets、Network、Svg；启用测试时另需 Test。Svg 用于内置的矢量控件指示器。
 
 ```powershell
 Set-Location C:\Dev\DiskCleaner
@@ -55,3 +62,18 @@ python tools\verify_mainwindow.py --apply
 
 该脚本捕获浅色、深色、空状态、文件列表、紧凑窗口及 150% 缩放画面，将证据写入
 `work/ui-redesign/`，完成后恢复用户设置。
+
+新版主题扩展截图（增加 125%/200%、英文与项目扫描）及隔离弹窗验证：
+
+```powershell
+python tools\verify_mainwindow.py --dry-run --output work\agent-light-ui --skip-comparison --extended
+python tools\verify_mainwindow.py --apply --output work\agent-light-ui --skip-comparison --extended
+$env:QT_QPA_PLATFORM = 'offscreen'
+$env:QT_QPA_PLATFORM_PLUGIN_PATH = 'C:\Qt\6.11.2\mingw_64\plugins\platforms'
+$env:QT_QPA_FONTDIR = 'C:\Windows\Fonts'
+$env:QT_FORCE_STDERR_LOGGING = '1'
+.\build\UiPreview.exe .\work\sample .\work\agent-light-ui\controls
+```
+
+`UiPreview` 随测试目标构建，使用临时设置目录；所有导出与多位置对话框只检查后取消，
+不提交文件操作。主窗口截图也可在设置 `QT_QPA_PLATFORM=offscreen` 后运行，避免占用桌面。
