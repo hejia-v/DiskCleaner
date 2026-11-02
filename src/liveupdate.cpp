@@ -102,6 +102,9 @@ Removal Tree::removeNodes(const std::vector<uint32_t>& ids)
             for (uint32_t j = 0; j < node.childCount; ++j)
                 stack.push_back(children[node.childBegin + j]);
             node.removed = 1;
+            ++discardedNodes;
+            discardedNames += node.nameLen;
+            discardedChildren += node.childCapacity;
             liveChildren.remove(next);
             result.nodes.push_back(next);
             node.childCount = 0;
@@ -128,6 +131,51 @@ Removal Tree::removeNodes(const std::vector<uint32_t>& ids)
     }
     result.ancestors.assign(ancestors.begin(), ancestors.end());
     return result;
+}
+bool Tree::needsCompaction() const
+{
+    return discardedNodes > std::max(size_t(1024), nodes.size() / 2) ||
+           discardedNames > std::max(size_t(16384), names.size() / 2) ||
+           discardedChildren > std::max(size_t(4096), children.size() / 2) ||
+           // Moving files leaves spare capacity in otherwise live directories.
+           children.size() > std::max(size_t(4096), (nodes.size() - discardedNodes) * 4);
+}
+
+std::vector<uint32_t> Tree::compact()
+{
+    std::vector<uint32_t> mapping(nodes.size(), kNone);
+    Tree packed;
+    // Keep a removed scan root as a placeholder so recreation can still be observed.
+    for (uint32_t id = 0; id < nodes.size(); ++id) {
+        if (nodes[id].removed && id != root) continue;
+        mapping[id] = uint32_t(packed.nodes.size());
+        Node node = nodes[id];
+        node.nameOff = uint32_t(packed.names.size());
+        packed.names.insert(packed.names.end(), names.begin() + nodes[id].nameOff,
+                            names.begin() + nodes[id].nameOff + node.nameLen);
+        packed.nodes.push_back(node);
+    }
+    for (uint32_t id = 0; id < nodes.size(); ++id) {
+        if (mapping[id] == kNone) continue;
+        auto& node = packed.nodes[mapping[id]];
+        node.parent = node.parent == kNone ? kNone : mapping[node.parent];
+        node.childBegin = uint32_t(packed.children.size());
+        node.childCount = 0;
+        for (uint32_t j = 0; j < nodes[id].childCount; ++j) {
+            const auto child = children[nodes[id].childBegin + j];
+            if (mapping[child] == kNone) continue;
+            packed.nodes[mapping[child]].rowInParent = node.childCount++;
+            packed.children.push_back(mapping[child]);
+        }
+        node.childCapacity = node.childCount;
+    }
+    packed.root = root < mapping.size() ? mapping[root] : kNone;
+    if (packed.root != kNone && packed.nodes[packed.root].removed) {
+        packed.discardedNodes = 1;
+        packed.discardedNames = packed.nodes[packed.root].nameLen;
+    }
+    *this = std::move(packed);
+    return mapping;
 }
 } // namespace wt
 
@@ -219,6 +267,7 @@ LiveDelta applyLiveUpdate(Tree& tree, const LiveUpdate& update, bool allowInsert
     const auto nameNode = [&](uint32_t id, const QString& name) {
         if (tree.name(id) == name) return;
         auto& node = tree.nodes[id];
+        tree.discardedNames += node.nameLen;
         node.nameOff = uint32_t(tree.names.size()); node.nameLen = uint32_t(name.size());
         const auto* chars = reinterpret_cast<const char16_t*>(name.utf16());
         tree.names.insert(tree.names.end(), chars, chars + name.size());
@@ -226,6 +275,7 @@ LiveDelta applyLiveUpdate(Tree& tree, const LiveUpdate& update, bool allowInsert
     const auto attach = [&](uint32_t parent, uint32_t id) {
         auto& node = tree.nodes[parent];
         if (node.childCount == node.childCapacity) {
+            tree.discardedChildren += node.childCapacity;
             const auto begin = uint32_t(tree.children.size());
             const auto capacity = std::max(uint32_t(4), node.childCapacity * 2);
             tree.children.resize(size_t(begin) + capacity);
@@ -253,6 +303,9 @@ LiveDelta applyLiveUpdate(Tree& tree, const LiveUpdate& update, bool allowInsert
                 if (tree.nodes[child].parent == next && !tree.nodes[child].removed) stack.push_back(child);
             }
             node.removed = 1; node.childCount = 0;
+            ++tree.discardedNodes;
+            tree.discardedNames += node.nameLen;
+            tree.discardedChildren += node.childCapacity;
             delta.removal.nodes.push_back(next);
             lookup.directories.remove(next);
         }
@@ -275,7 +328,7 @@ LiveDelta applyLiveUpdate(Tree& tree, const LiveUpdate& update, bool allowInsert
             node.parent = parent; node.childBegin = node.childCount = node.childCapacity = 0;
             node.files = node.folders = 0; node.removed = 0; node.nameLen = 0;
             if (node.isDir) node.size = node.alloc = 0;
-            if (id == root) tree.nodes[id] = node;
+            if (id == root) { --tree.discardedNodes; tree.nodes[id] = node; }
             else { id = uint32_t(tree.nodes.size()); tree.nodes.push_back(node); }
             nameNode(id, id == root ? QDir::toNativeSeparators(path) : name);
             if (parent != kNone) { attach(parent, id); adjust(parent, tree.nodes[id], true); }

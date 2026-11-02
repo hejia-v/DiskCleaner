@@ -8,16 +8,36 @@
 #include <algorithm>
 #include <cstring>
 #include <memory>
+#include <stdexcept>
 #include <QDateTime>
 #include <QElapsedTimer>
 #include <QDir>
 #include <QFileInfo>
 #include <QHash>
 #include <QFile>
+#include <QSaveFile>
 #include <QStringList>
 
 namespace wt {
 namespace {
+
+struct ScanCanceled {};
+void checkCanceled(const std::atomic_bool* cancel)
+{
+    if (cancel && cancel->load(std::memory_order_relaxed)) throw ScanCanceled{};
+}
+
+struct FindHandle {
+    HANDLE handle;
+    ~FindHandle() { if (handle != INVALID_HANDLE_VALUE) FindClose(handle); }
+};
+
+// Validate before adding an untrusted attribute length (which may wrap uint32_t).
+bool validAttribute(const uint8_t* record, uint32_t used, uint32_t offset, uint32_t length)
+{
+    if (offset > used || length < 16 || length > used - offset) return false;
+    return record[offset + 8] ? length >= 64 : length >= 24;
+}
 
 inline uint16_t rd16(const uint8_t* p) { uint16_t v; memcpy(&v, p, 2); return v; }
 inline uint32_t rd32(const uint8_t* p) { uint32_t v; memcpy(&v, p, 4); return v; }
@@ -76,6 +96,7 @@ public:
         clusterSize_ = uint32_t(bytesPerSector_) * sectorsPerCluster;
         mftLcn_ = rd64(b + 0x30);
         int8_t cpr = static_cast<int8_t>(b[0x40]);
+        if (cpr <= 0 && (cpr == 0 || cpr < -16)) return false;
         recordSize_ = cpr > 0 ? uint32_t(cpr) * clusterSize_ : (1u << uint32_t(-cpr));
         if (recordSize_ < 512 || recordSize_ > 65536) return false;
         return true;
@@ -196,7 +217,7 @@ int nsPriority(uint8_t ns)
 }
 
 bool parseRecord(uint8_t* rec, uint32_t recordSize, uint32_t sectorSize,
-                 std::vector<char16_t>& nameArena, Rec& out)
+                 std::vector<char16_t>& nameArena, Rec& out, std::atomic_bool* cancel = nullptr)
 {
     if (memcmp(rec, "FILE", 4) != 0) return false;
 
@@ -216,6 +237,8 @@ bool parseRecord(uint8_t* rec, uint32_t recordSize, uint32_t sectorSize,
     out.inUse = (flags & 1) ? 1 : 0;
     out.isDir = (flags & 2) ? 1 : 0;
     out.recNo = rd32(rec + 0x2C);
+    // Deleted records may contain stale attribute bytes; they are not scan input.
+    if (!out.inUse) return false;
 
     uint32_t used = rd32(rec + 0x18);
     if (used < 0x30 || used > recordSize) used = recordSize;
@@ -228,24 +251,31 @@ bool parseRecord(uint8_t* rec, uint32_t recordSize, uint32_t sectorSize,
     bool haveData = false;
 
     uint32_t off = attrOff;
-    while (off + 8 < used) {
+    while (off <= used && used - off >= 8) {
+        checkCanceled(cancel);
         uint32_t type = rd32(rec + off);
         if (type == 0xFFFFFFFF) break;
         uint32_t len = rd32(rec + off + 4);
-        if (len < 8 || off + len > used) break;
+        if (!validAttribute(rec, used, off, len))
+            throw std::runtime_error("Invalid MFT attribute length");
         uint8_t nonResident = rec[off + 8];
 
         if (type == 0x10 && !nonResident) {  // STANDARD_INFORMATION
-            uint16_t vlen = rd16(rec + off + 0x10);
+            uint32_t vlen = rd32(rec + off + 0x10);
             uint16_t voff = rd16(rec + off + 0x14);
-            if (voff + vlen <= len && vlen >= 0x24) {
+            if (voff < 24 || voff > len || vlen > len - voff)
+                throw std::runtime_error("Invalid MFT attribute value");
+            if (vlen >= 0x24) {
                 out.ctime = static_cast<int64_t>(rd64(rec + off + voff + 0));
                 out.mtime = static_cast<int64_t>(rd64(rec + off + voff + 8));
                 out.atime = static_cast<int64_t>(rd64(rec + off + voff + 24));
                 out.attrs = rd32(rec + off + voff + 0x20);
             }
         } else if (type == 0x80 && !nonResident && rec[off + 9] == 0) {  // unnamed $DATA
-            uint16_t vlen = rd16(rec + off + 0x10);
+            uint32_t vlen = rd32(rec + off + 0x10);
+            const uint16_t voff = rd16(rec + off + 0x14);
+            if (voff < 24 || voff > len || vlen > len - voff)
+                throw std::runtime_error("Invalid MFT data value");
             dataReal = vlen;
             dataAlloc = vlen;
             haveData = true;
@@ -255,9 +285,11 @@ bool parseRecord(uint8_t* rec, uint32_t recordSize, uint32_t sectorSize,
             dataReal = rd64(rec + off + 0x30);
             haveData = true;
         } else if (type == 0x30 && !nonResident) {  // FILE_NAME
-            uint16_t vlen = rd16(rec + off + 0x10);
+            uint32_t vlen = rd32(rec + off + 0x10);
             uint16_t voff = rd16(rec + off + 0x14);
-            if (voff + vlen <= len && vlen >= 0x42) {
+            if (voff < 24 || voff > len || vlen > len - voff)
+                throw std::runtime_error("Invalid MFT filename value");
+            if (vlen >= 0x42) {
                 const uint8_t* v = rec + off + voff;
                 uint64_t parentRef = rd64(v);
                 uint8_t nameLen = v[0x40];
@@ -315,11 +347,12 @@ std::wstring queryVolumeLabel(wchar_t letter)
     return L"";
 }
 
-void attachOrphans(Tree& t)
+void attachOrphans(Tree& t, std::atomic_bool* cancel)
 {
     const uint32_t n = uint32_t(t.nodes.size());
     std::vector<uint8_t> state(n, 0);  // 0 unknown, 1 ok, 2 orphan
     for (uint32_t i = 0; i < n; ++i) {
+        checkCanceled(cancel);
         if (i == t.root || state[i] == 1) continue;
         uint32_t cur = i;
         int guard = 0;
@@ -336,10 +369,11 @@ void attachOrphans(Tree& t)
     }
 }
 
-void buildFromRecords(std::vector<Rec>& recs, std::vector<char16_t>& arena, uint32_t recordCount,
-                      Tree& tree, uint64_t& usedRecords)
+void buildFromRecords(std::vector<Rec>& recs, std::vector<char16_t>& arena,
+                      Tree& tree, uint64_t& usedRecords, std::atomic_bool* cancel)
 {
-    std::vector<uint32_t> map(size_t(recordCount) + 1, kNone);
+    // Record numbers may be sparse or corrupt; never allocate by the largest ID.
+    QHash<uint32_t, uint32_t> map;
     tree.nodes.reserve(recs.size() + 1);
     tree.names.reserve(arena.size() + 64);
 
@@ -358,9 +392,9 @@ void buildFromRecords(std::vector<Rec>& recs, std::vector<char16_t>& arena, uint
     // root name is patched by caller later (path string), placeholder here
     usedRecords = 0;
     for (const Rec& r : recs) {
+        checkCanceled(cancel);
         if (!r.inUse || r.nameLen == 0) continue;
         if (r.recNo == 5) continue;  // root record
-        if (r.recNo >= map.size()) continue;
         Node nd;
         nd.size = r.size;
         nd.alloc = r.alloc;
@@ -377,26 +411,21 @@ void buildFromRecords(std::vector<Rec>& recs, std::vector<char16_t>& arena, uint
         ++usedRecords;
     }
 
-    for (uint32_t i = 1; i < tree.nodes.size(); ++i) {
-        uint32_t parentRec = kNone;
-        // recover parent record from the matching rec (same order as creation)
-        (void)parentRec;
-    }
     // second pass over recs to link parents (recs order == node order for accepted ones)
     size_t nodeIdx = 1;
     for (const Rec& r : recs) {
+        checkCanceled(cancel);
         if (!r.inUse || r.nameLen == 0) continue;
         if (r.recNo == 5) continue;
-        if (r.recNo >= map.size()) continue;
         if (nodeIdx >= tree.nodes.size()) break;
         uint32_t p = r.parent;
-        if (p == kNone || p >= map.size() || map[p] == kNone || map[p] == nodeIdx)
+        if (p == kNone || !map.contains(p) || map.value(p) == nodeIdx)
             tree.nodes[nodeIdx].parent = 0;
         else
-            tree.nodes[nodeIdx].parent = map[p];
+            tree.nodes[nodeIdx].parent = map.value(p);
         ++nodeIdx;
     }
-    attachOrphans(tree);
+    attachOrphans(tree, cancel);
 }
 
 void setRootName(Tree& tree, const QString& name)
@@ -441,18 +470,21 @@ QString Tree::path(uint32_t i) const
     return QDir::toNativeSeparators(p);
 }
 
-void Tree::finalize()
+void Tree::finalize(std::atomic_bool* cancel)
 {
+    checkCanceled(cancel);
     liveChildren.clear();
     const uint32_t n = uint32_t(nodes.size());
     if (n == 0) return;
     std::vector<uint32_t> cnt(n, 0);
     for (uint32_t i = 0; i < n; ++i) {
+        checkCanceled(cancel);
         uint32_t p = nodes[i].parent;
         if (p != kNone && p < n && p != i) cnt[p]++;
     }
     uint32_t total = 0;
     for (uint32_t i = 0; i < n; ++i) {
+        checkCanceled(cancel);
         nodes[i].childBegin = total;
         nodes[i].childCount = cnt[i];
         nodes[i].childCapacity = cnt[i];
@@ -460,8 +492,12 @@ void Tree::finalize()
     }
     children.assign(total, 0);
     std::vector<uint32_t> cursor(n);
-    for (uint32_t i = 0; i < n; ++i) cursor[i] = nodes[i].childBegin;
     for (uint32_t i = 0; i < n; ++i) {
+        checkCanceled(cancel);
+        cursor[i] = nodes[i].childBegin;
+    }
+    for (uint32_t i = 0; i < n; ++i) {
+        checkCanceled(cancel);
         uint32_t p = nodes[i].parent;
         if (p == kNone || p >= n || p == i) continue;
         uint32_t pos = cursor[p]++;
@@ -480,6 +516,7 @@ void Tree::finalize()
     for (size_t k = 0; k < order.size(); ++k) {
         const Node& nd = nodes[order[k]];
         for (uint32_t j = 0; j < nd.childCount; ++j) {
+            checkCanceled(cancel);
             uint32_t c = children[nd.childBegin + j];
             if (!seen[c]) {
                 seen[c] = 1;
@@ -489,10 +526,12 @@ void Tree::finalize()
     }
 
     for (auto it = order.rbegin(); it != order.rend(); ++it) {
+        checkCanceled(cancel);
         Node& nd = nodes[*it];
         uint64_t s = 0, a = 0;
         uint32_t f = 0, d = 0;
         for (uint32_t j = 0; j < nd.childCount; ++j) {
+            checkCanceled(cancel);
             const Node& c = nodes[children[nd.childBegin + j]];
             s += c.size;
             a += c.alloc;
@@ -506,29 +545,36 @@ void Tree::finalize()
         nd.folders = d;
     }
 
-    sortRecursive(2, false);
+    sortRecursive(2, false, cancel);
+    checkCanceled(cancel);
 }
 
-void Tree::sortRecursive(int column, bool ascending)
+void Tree::sortRecursive(int column, bool ascending, std::atomic_bool* cancel)
 {
     if (root == kNone || root >= nodes.size()) return;
     std::vector<uint32_t> stack;
     stack.push_back(root);
     while (!stack.empty()) {
+        checkCanceled(cancel);
         const uint32_t n = stack.back();
         stack.pop_back();
-        sortChildrenBy(n, column, ascending);
+        sortChildrenBy(n, column, ascending, cancel);
         const Node& nd = nodes[n];
-        for (uint32_t i = 0; i < nd.childCount; ++i) stack.push_back(children[nd.childBegin + i]);
+        for (uint32_t i = 0; i < nd.childCount; ++i) {
+            checkCanceled(cancel);
+            stack.push_back(children[nd.childBegin + i]);
+        }
     }
 }
 
-void Tree::sortChildrenBy(uint32_t node, int column, bool ascending)
+void Tree::sortChildrenBy(uint32_t node, int column, bool ascending, std::atomic_bool* cancel)
 {
+    checkCanceled(cancel);
     if (node >= nodes.size()) return;
     Node& nd = nodes[node];
     if (nd.childCount < 2) return;
     auto key = [&](uint32_t a, uint32_t b) {
+        checkCanceled(cancel);
         const Node& x = nodes[a];
         const Node& y = nodes[b];
         switch (column) {
@@ -547,6 +593,7 @@ void Tree::sortChildrenBy(uint32_t node, int column, bool ascending)
     std::sort(children.begin() + nd.childBegin, children.begin() + nd.childBegin + nd.childCount,
               [&](uint32_t a, uint32_t b) { return key(a, b); });
     for (uint32_t j = 0; j < nd.childCount; ++j) {
+        checkCanceled(cancel);
         nodes[children[nd.childBegin + j]].rowInParent = j;
     }
 }
@@ -555,6 +602,7 @@ void Tree::sortChildrenBy(uint32_t node, int column, bool ascending)
 
 static ScanResult scanNtfsImpl(wchar_t letter, const ScanOptions& opt)
 {
+    checkCanceled(opt.cancel);
     ScanResult res;
     QElapsedTimer timer;
     timer.start();
@@ -600,16 +648,18 @@ static ScanResult scanNtfsImpl(wchar_t letter, const ScanOptions& opt)
         uint32_t off = rd16(rec0.data() + 0x14);
         uint32_t used = rd32(rec0.data() + 0x18);
         if (used > recordSize) used = recordSize;
-        while (off + 8 < used) {
+        while (off <= used && used - off >= 8) {
+            checkCanceled(opt.cancel);
             uint32_t type = rd32(rec0.data() + off);
             if (type == 0xFFFFFFFF) break;
             uint32_t len = rd32(rec0.data() + off + 4);
-            if (len < 8 || off + len > used) break;
+            if (!validAttribute(rec0.data(), used, off, len))
+                throw std::runtime_error("Invalid MFT runlist attribute");
             if (type == 0x80 && rec0[off + 8]) {  // DATA, non-resident
                 uint64_t realSize = rd64(rec0.data() + off + 0x30);
                 uint64_t allocSz = rd64(rec0.data() + off + 0x28);
                 uint16_t runOff = rd16(rec0.data() + off + 0x20);
-                if (runOff < len) {
+                if (runOff >= 64 && runOff < len) {
                     dataSize = realSize;
                     allocSize = allocSz;
                     parseRunList(rec0.data() + off + runOff, len - runOff, runs, dataSize, allocSize);
@@ -627,9 +677,9 @@ static ScanResult scanNtfsImpl(wchar_t letter, const ScanOptions& opt)
     if (opt.status) opt.status(QStringLiteral("Scanning MFT: %1 records").arg(recordCount));
 
     std::vector<Rec> recs;
-    recs.reserve(size_t(recordCount / 2));
+    recs.reserve(size_t(std::min<uint64_t>(recordCount, 65536)));
     std::vector<char16_t> arena;
-    arena.reserve(size_t(recordCount) * 8);
+    arena.reserve(size_t(std::min<uint64_t>(recordCount, 65536)) * 8);
 
     const uint64_t chunkBytes = 4ull << 20;
     std::vector<uint8_t> buf(static_cast<size_t>(chunkBytes));
@@ -651,7 +701,8 @@ static ScanResult scanNtfsImpl(wchar_t letter, const ScanOptions& opt)
         if (!vol.readAt(phys, buf.data(), bytes)) break;
         for (uint64_t k = 0; k < nrec; ++k) {
             Rec r;
-            if (parseRecord(buf.data() + k * recordSize, recordSize, sectorSize, arena, r))
+            checkCanceled(opt.cancel);
+            if (parseRecord(buf.data() + k * recordSize, recordSize, sectorSize, arena, r, opt.cancel))
                 recs.push_back(r);
         }
         index += nrec;
@@ -672,11 +723,10 @@ static ScanResult scanNtfsImpl(wchar_t letter, const ScanOptions& opt)
     }
     if (opt.status) opt.status(QStringLiteral("Building tree..."));
     uint64_t builtNodes = 0;
-    buildFromRecords(recs, arena, uint32_t(std::min<uint64_t>(recordCount, 0xFFFFFFF0ull)),
-                     res.tree, builtNodes);
+    buildFromRecords(recs, arena, res.tree, builtNodes, opt.cancel);
     res.parsed = builtNodes;
     setRootName(res.tree, QString::fromWCharArray((std::wstring(1, letter) + L":\\").c_str()));
-    res.tree.finalize();
+    res.tree.finalize(opt.cancel);
     res.ok = true;
     res.usesMft = true;
     res.seconds = timer.elapsed() / 1000.0;
@@ -692,6 +742,7 @@ struct PendingDir {
 
 static ScanResult scanFolderImpl(const QString& rootPath, const ScanOptions& opt)
 {
+    checkCanceled(opt.cancel);
     ScanResult res;
     QElapsedTimer timer;
     timer.start();
@@ -747,8 +798,10 @@ static ScanResult scanFolderImpl(const QString& rootPath, const ScanOptions& opt
         HANDLE h = FindFirstFileExW(pattern.c_str(), FindExInfoBasic, &fd, FindExSearchNameMatch,
                                     nullptr, FIND_FIRST_EX_LARGE_FETCH);
         if (h == INVALID_HANDLE_VALUE) continue;
+        FindHandle findHandle{h};
 
         do {
+            checkCanceled(opt.cancel);
             if (fd.cFileName[0] == L'.' &&
                 (fd.cFileName[1] == 0 || (fd.cFileName[1] == L'.' && fd.cFileName[2] == 0)))
                 continue;
@@ -783,12 +836,12 @@ static ScanResult scanFolderImpl(const QString& rootPath, const ScanOptions& opt
             }
             if (opt.status && (visited % 20000) == 0)
                 opt.status(QStringLiteral("Scanning: %1 items").arg(visited));
+            checkCanceled(opt.cancel);
         } while (FindNextFileW(h, &fd));
-        FindClose(h);
     }
 
     if (opt.status) opt.status(QStringLiteral("Building tree..."));
-    tree.finalize();
+    tree.finalize(opt.cancel);
     res.ok = true;
     res.records = visited;
     res.seconds = timer.elapsed() / 1000.0;
@@ -871,7 +924,7 @@ bool writeSyntheticMft(const QString& path, int recordCount, QString& error)
     }
     QByteArray header(kMftMagic, 8);
     uint32_t recordSize = 1024;
-    uint64_t count = uint64_t(recordCount) + 512;
+    uint64_t count = uint64_t(recordCount) + 11;
     header.append(reinterpret_cast<const char*>(&recordSize), 4);
     header.append(reinterpret_cast<const char*>(&count), 8);
     f.write(header);
@@ -903,8 +956,9 @@ bool writeSyntheticMft(const QString& path, int recordCount, QString& error)
     return true;
 }
 
-ScanResult scanMftDump(const QString& path, const ScanOptions& opt)
+static ScanResult scanMftDumpImpl(const QString& path, const ScanOptions& opt)
 {
+    checkCanceled(opt.cancel);
     ScanResult res;
     QElapsedTimer timer;
     timer.start();
@@ -938,12 +992,16 @@ ScanResult scanMftDump(const QString& path, const ScanOptions& opt)
         res.error = QStringLiteral("Unsupported record size %1").arg(recordSize);
         return res;
     }
+    const uint64_t availableRecords = uint64_t(f.size() - f.pos()) / recordSize;
+    if (count > availableRecords || count > 64ull * 1024 * 1024) {
+        res.error = QStringLiteral("Invalid or excessive MFT record count");
+        return res;
+    }
 
     std::vector<Rec> recs;
-    recs.reserve(size_t(count));
-    uint32_t maxRecNo = 0;
+    recs.reserve(size_t(std::min<uint64_t>(count, 65536)));
     std::vector<char16_t> arena;
-    arena.reserve(size_t(count) * 8);
+    arena.reserve(size_t(std::min<uint64_t>(count, 65536)) * 8);
     std::vector<uint8_t> buf;
     buf.resize(static_cast<size_t>(recordSize));
 
@@ -952,11 +1010,11 @@ ScanResult scanMftDump(const QString& path, const ScanOptions& opt)
             res.error = QStringLiteral("canceled");
             return res;
         }
-        if (f.read(reinterpret_cast<char*>(buf.data()), recordSize) != qint64(recordSize)) break;
+        if (f.read(reinterpret_cast<char*>(buf.data()), recordSize) != qint64(recordSize))
+            throw std::runtime_error("Truncated MFT record");
         Rec r;
-        if (parseRecord(buf.data(), recordSize, 512, arena, r)) {
+        if (parseRecord(buf.data(), recordSize, 512, arena, r, opt.cancel)) {
             recs.push_back(r);
-            maxRecNo = std::max(maxRecNo, r.recNo);
         }
         if (opt.status && (i % 200000) == 0 && i > 0)
             opt.status(QStringLiteral("Reading MFT dump: %1 / %2").arg(i).arg(count));
@@ -969,22 +1027,23 @@ ScanResult scanMftDump(const QString& path, const ScanOptions& opt)
         if (!r.hasData) ++res.noDataFiles;
         if (r.size == 0) ++res.zeroSizeFiles;
     }
-    const uint32_t mapSize =
-        std::max<uint32_t>(maxRecNo + 1, uint32_t(std::min<uint64_t>(count, 0xFFFFFFF0ull)));
+    if (opt.status) opt.status(QStringLiteral("Building tree..."));
     uint64_t builtNodes = 0;
-    buildFromRecords(recs, arena, mapSize, res.tree, builtNodes);
+    buildFromRecords(recs, arena, res.tree, builtNodes, opt.cancel);
     res.parsed = builtNodes;
     setRootName(res.tree, QFileInfo(path).completeBaseName());
-    res.tree.finalize();
+    res.tree.finalize(opt.cancel);
     res.ok = true;
     res.usesMft = true;
     res.seconds = timer.elapsed() / 1000.0;
     return res;
 }
 
-ScanResult dumpMftToFile(wchar_t letter, const QString& outputPath, std::atomic_bool& cancel,
+static ScanResult dumpMftToFileImpl(wchar_t letter, const QString& outputPath, std::atomic_bool& cancel,
                          const StatusFn& status)
 {
+    checkCanceled(&cancel);
+    if (status) status(QStringLiteral("Reading $MFT..."));
     ScanResult res;
     Volume vol;
     if (!vol.open(letter)) {
@@ -1020,16 +1079,18 @@ ScanResult dumpMftToFile(wchar_t letter, const QString& outputPath, std::atomic_
     uint32_t off = rd16(rec0.data() + 0x14);
     uint32_t used = rd32(rec0.data() + 0x18);
     if (used > recordSize) used = recordSize;
-    while (off + 8 < used) {
+    while (off <= used && used - off >= 8) {
+        checkCanceled(&cancel);
         uint32_t type = rd32(rec0.data() + off);
         if (type == 0xFFFFFFFF) break;
         uint32_t len = rd32(rec0.data() + off + 4);
-        if (len < 8 || off + len > used) break;
+        if (!validAttribute(rec0.data(), used, off, len))
+            throw std::runtime_error("Invalid MFT runlist attribute");
         if (type == 0x80 && rec0[off + 8]) {
             dataSize = rd64(rec0.data() + off + 0x30);
             allocSize = rd64(rec0.data() + off + 0x28);
             uint16_t runOff = rd16(rec0.data() + off + 0x20);
-            if (runOff < len)
+            if (runOff >= 64 && runOff < len)
                 parseRunList(rec0.data() + off + runOff, len - runOff, runs, dataSize, allocSize);
         }
         off += len;
@@ -1039,7 +1100,7 @@ ScanResult dumpMftToFile(wchar_t letter, const QString& outputPath, std::atomic_
         return res;
     }
 
-    QFile out(outputPath);
+    QSaveFile out(outputPath);
     if (!out.open(QIODevice::WriteOnly)) {
         res.error = QStringLiteral("Cannot write %1").arg(outputPath);
         return res;
@@ -1048,32 +1109,35 @@ ScanResult dumpMftToFile(wchar_t letter, const QString& outputPath, std::atomic_
     QByteArray header(kMftMagic, 8);
     header.append(reinterpret_cast<const char*>(&recordSize), 4);
     header.append(reinterpret_cast<const char*>(&count), 8);
-    out.write(header);
+    if (out.write(header) != header.size()) throw std::runtime_error("Cannot write MFT header");
 
     const uint64_t chunk = 4ull << 20;
     std::vector<uint8_t> buf;
     buf.resize(static_cast<size_t>(chunk));
     uint64_t index = 0;
+    QElapsedTimer progressTimer;
+    progressTimer.start();
     while (index < count) {
-        if (cancel.load(std::memory_order_relaxed)) {
-            out.close();
-            out.remove();
-            res.error = QStringLiteral("canceled");
-            return res;
-        }
+        checkCanceled(&cancel);
         uint64_t fileOff = index * recordSize;
         uint64_t phys = 0, avail = 0;
-        if (!mapOffset(runs, clusterSize, fileOff, phys, avail)) break;
+        if (!mapOffset(runs, clusterSize, fileOff, phys, avail))
+            throw std::runtime_error("Incomplete MFT runlist");
         uint64_t nrec = std::min<uint64_t>({count - index, avail / recordSize, chunk / recordSize});
-        if (nrec == 0) break;
+        if (nrec == 0) throw std::runtime_error("Invalid MFT run length");
         DWORD bytes = DWORD(nrec * recordSize);
-        if (!vol.readAt(phys, buf.data(), bytes)) break;
-        out.write(reinterpret_cast<const char*>(buf.data()), bytes);
+        if (!vol.readAt(phys, buf.data(), bytes)) throw std::runtime_error("Cannot read MFT data");
+        checkCanceled(&cancel);
+        if (out.write(reinterpret_cast<const char*>(buf.data()), bytes) != bytes)
+            throw std::runtime_error("Cannot write MFT data");
         index += nrec;
-        if (status && (index % 200000) == 0)
+        if (status && (progressTimer.elapsed() >= 100 || index == count)) {
             status(QStringLiteral("Dumping MFT: %1 / %2").arg(index).arg(count));
+            progressTimer.restart();
+        }
     }
-    out.close();
+    checkCanceled(&cancel);
+    if (!out.commit()) throw std::runtime_error("Cannot save MFT dump");
     res.records = index;
     res.ok = true;
     res.usesMft = true;
@@ -1082,19 +1146,22 @@ ScanResult dumpMftToFile(wchar_t letter, const QString& outputPath, std::atomic_
 
 // ---------------------------------------------------------------- merging
 
-Tree mergeTrees(std::vector<Tree>& parts, const QString& rootName)
+Tree mergeTrees(std::vector<Tree>& parts, const QString& rootName, std::atomic_bool* cancel)
 {
+    checkCanceled(cancel);
     Tree out;
     Node root;
     root.isDir = 1;
     out.nodes.push_back(root);
     out.root = 0;
     for (Tree& part : parts) {
+        checkCanceled(cancel);
         if (part.nodes.empty() || part.root >= part.nodes.size()) continue;
         const uint32_t nodeBase = uint32_t(out.nodes.size());
         const uint32_t nameBase = uint32_t(out.names.size());
         out.names.insert(out.names.end(), part.names.begin(), part.names.end());
         for (uint32_t i = 0; i < part.nodes.size(); ++i) {
+            checkCanceled(cancel);
             Node nd = part.nodes[i];
             nd.nameOff += nameBase;
             if (nd.isDir) {
@@ -1116,7 +1183,7 @@ Tree mergeTrees(std::vector<Tree>& parts, const QString& rootName)
     out.nodes[0].nameLen = uint32_t(name.size());
     const char16_t* p = reinterpret_cast<const char16_t*>(name.utf16());
     out.names.insert(out.names.end(), p, p + name.size());
-    out.finalize();
+    out.finalize(cancel);
     return out;
 }
 
@@ -1193,8 +1260,9 @@ uint32_t parseAttrField(const QString& s)
 
 }  // namespace
 
-ScanResult importCsvTree(const QString& path, const ScanOptions& opt)
+static ScanResult importCsvTreeImpl(const QString& path, const ScanOptions& opt)
 {
+    checkCanceled(opt.cancel);
     ScanResult res;
     QElapsedTimer timer;
     timer.start();
@@ -1252,6 +1320,7 @@ ScanResult importCsvTree(const QString& path, const ScanOptions& opt)
     };
 
     std::function<uint32_t(const QString&)> ensureDir = [&](const QString& raw) -> uint32_t {
+        checkCanceled(opt.cancel);
         QString p = raw;
         while (p.endsWith(QLatin1Char('\\'))) p.chop(1);
         if (p.isEmpty()) return 0;
@@ -1338,7 +1407,8 @@ ScanResult importCsvTree(const QString& path, const ScanOptions& opt)
     if (rootPath.isEmpty()) rootPath = QFileInfo(path).completeBaseName();
     tree.nodes[0].nameOff = addName(rootPath);
     tree.nodes[0].nameLen = uint32_t(rootPath.size());
-    tree.finalize();
+    if (opt.status) opt.status(QStringLiteral("Building tree..."));
+    tree.finalize(opt.cancel);
     res.ok = true;
     res.records = rows;
     res.seconds = timer.elapsed() / 1000.0;
@@ -1347,21 +1417,49 @@ ScanResult importCsvTree(const QString& path, const ScanOptions& opt)
 
 ScanResult scanDrive(wchar_t letter, const ScanOptions& opt)
 {
-    wchar_t root[8];
-    swprintf_s(root, L"%c:\\", letter);
-    if (opt.preferMft) {
-        ScanResult r = scanNtfsImpl(letter, opt);
-        if (r.ok) return r;
-        // fall back to directory walk
-    }
-    ScanResult r = scanFolderImpl(QString::fromWCharArray(root), opt);
-    if (!r.ok && r.error.isEmpty()) r.error = QStringLiteral("Scan failed");
-    return r;
+    return runScanTask([&] {
+        wchar_t root[8];
+        swprintf_s(root, L"%c:\\", letter);
+        if (opt.preferMft) {
+            ScanResult r = scanNtfsImpl(letter, opt);
+            if (r.ok || r.error == QLatin1String("canceled")) return r;
+            checkCanceled(opt.cancel);
+            // fall back to directory walk
+        }
+        ScanResult r = scanFolderImpl(QString::fromWCharArray(root), opt);
+        if (!r.ok && r.error.isEmpty()) r.error = QStringLiteral("Scan failed");
+        return r;
+    });
 }
 
 ScanResult scanFolder(const QString& path, const ScanOptions& opt)
 {
-    return scanFolderImpl(path, opt);
+    return runScanTask([&] { return scanFolderImpl(path, opt); });
+}
+
+ScanResult scanMftDump(const QString& path, const ScanOptions& opt)
+{
+    return runScanTask([&] { return scanMftDumpImpl(path, opt); });
+}
+
+ScanResult importCsvTree(const QString& path, const ScanOptions& opt)
+{
+    return runScanTask([&] { return importCsvTreeImpl(path, opt); });
+}
+
+ScanResult dumpMftToFile(wchar_t letter, const QString& path, std::atomic_bool& cancel, const StatusFn& status)
+{
+    return runScanTask([&] { return dumpMftToFileImpl(letter, path, cancel, status); });
+}
+
+ScanResult runScanTask(const std::function<ScanResult()>& task)
+{
+    ScanResult result;
+    try { return task(); }
+    catch (const ScanCanceled&) { result.error = QStringLiteral("canceled"); }
+    catch (const std::bad_alloc&) { result.error = QStringLiteral("Not enough memory to complete the operation"); }
+    catch (const std::exception& error) { result.error = QString::fromUtf8(error.what()); }
+    return result;
 }
 
 

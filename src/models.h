@@ -14,6 +14,7 @@ public:
     explicit TreeModel(QObject* parent = nullptr);
 
     void setTree(wt::Tree* tree);
+    std::vector<uint32_t> compactTree();
     wt::Tree* tree() const { return tree_; }
     uint32_t nodeOf(const QModelIndex& idx) const;
     QModelIndex indexForNode(uint32_t node) const;

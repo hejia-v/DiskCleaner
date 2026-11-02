@@ -51,6 +51,7 @@ struct Tree {
     uint32_t root = kNone;
     // Created lazily for directories touched by live updates, not for every scanned file.
     mutable QHash<uint32_t, QHash<QString, uint32_t>> liveChildren;
+    size_t discardedNodes = 0, discardedNames = 0, discardedChildren = 0;
 
     void clear()
     {
@@ -58,6 +59,7 @@ struct Tree {
         names.clear();
         children.clear();
         liveChildren.clear();
+        discardedNodes = discardedNames = discardedChildren = 0;
         root = kNone;
     }
     QString name(uint32_t i) const;
@@ -65,9 +67,12 @@ struct Tree {
     std::vector<uint32_t> findPaths(const QStringList& paths) const;
     Removal removeNodes(const std::vector<uint32_t>& ids);
     uint32_t survivingAncestor(uint32_t id) const;
-    void finalize();  // build child ranges, aggregates, default sort
-    void sortChildrenBy(uint32_t node, int column, bool ascending);
-    void sortRecursive(int column, bool ascending);
+    void finalize(std::atomic_bool* cancel = nullptr);  // build child ranges, aggregates, default sort
+    void sortChildrenBy(uint32_t node, int column, bool ascending, std::atomic_bool* cancel = nullptr);
+    void sortRecursive(int column, bool ascending, std::atomic_bool* cancel = nullptr);
+    bool needsCompaction() const;
+    // Call after consuming the live delta; all retained node IDs must be remapped.
+    std::vector<uint32_t> compact();
 };
 
 struct ScanResult {
@@ -93,6 +98,9 @@ struct ScanOptions {
     std::atomic_bool* cancel = nullptr;
 };
 
+// Convert cancellation/allocation/parser exceptions into a failed result at task boundaries.
+ScanResult runScanTask(const std::function<ScanResult()>& task);
+
 ScanResult scanDrive(wchar_t driveLetter, const ScanOptions& opt);
 ScanResult scanMftDump(const QString& path, const ScanOptions& opt);
 ScanResult importCsvTree(const QString& path, const ScanOptions& opt);
@@ -105,7 +113,7 @@ ScanResult scanFolder(const QString& path, const ScanOptions& opt);
 // matchPath is true) contains `include`, minus those containing `exclude`.
 // Directories are kept when any descendant survives; sizes are recomputed.
 Tree filterTree(const Tree& src, const QString& include, const QString& exclude, bool matchPath);
-Tree mergeTrees(std::vector<Tree>& parts, const QString& rootName);
+Tree mergeTrees(std::vector<Tree>& parts, const QString& rootName, std::atomic_bool* cancel = nullptr);
 
 QString formatSize(uint64_t bytes, UnitMode mode, int decimals);
 QString attributesText(uint32_t attrs);

@@ -103,6 +103,26 @@ void TreemapWidget::setTree(wt::Tree* tree, uint32_t root)
     refresh();
     emit navigationChanged();
 }
+
+void TreemapWidget::remapNodes(const std::vector<uint32_t>& mapping)
+{
+    const auto remap = [&](uint32_t id) { return id < mapping.size() ? mapping[id] : wt::kNone; };
+    root_ = remap(root_);
+    if (root_ == wt::kNone) root_ = tree_->root;
+    selected_ = remap(selected_);
+    QVector<uint32_t> history;
+    int position = -1;
+    for (int i = 0; i < history_.size(); ++i) {
+        const auto id = remap(history_[i]);
+        if (id == wt::kNone) continue;
+        history.append(id);
+        if (i <= historyPosition_) position = int(history.size()) - 1;
+    }
+    history_ = std::move(history);
+    historyPosition_ = position;
+    refresh();
+    emit navigationChanged();
+}
 void TreemapWidget::changeRoot(uint32_t node)
 {
     root_ = node;

@@ -38,10 +38,15 @@ if(DISK_CLEANER_BUILD_TESTS)
     target_compile_definitions(TreemapTests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
     target_link_libraries(TreemapTests PRIVATE Qt6::Widgets Qt6::Network Qt6::Test shell32 advapi32)
     add_test(NAME treemap COMMAND TreemapTests)
+    qt_add_executable(ResourceTests tests/resource_tests.cpp ${DiskCleaner_SOURCES})
+    target_include_directories(ResourceTests PRIVATE src)
+    target_compile_definitions(ResourceTests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_link_libraries(ResourceTests PRIVATE Qt6::Widgets Qt6::Network Qt6::Test shell32 advapi32)
+    add_test(NAME resources COMMAND ResourceTests)
     get_target_property(qt_qmake Qt6::qmake IMPORTED_LOCATION)
     execute_process(COMMAND "${qt_qmake}" -query QT_INSTALL_PLUGINS
                     OUTPUT_VARIABLE qt_plugins OUTPUT_STRIP_TRAILING_WHITESPACE)
-    set_tests_properties(treemap PROPERTIES TIMEOUT 60
+    set_tests_properties(treemap resources PROPERTIES TIMEOUT 90
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=${qt_plugins}/platforms;QT_FORCE_STDERR_LOGGING=1")
 endif()
 

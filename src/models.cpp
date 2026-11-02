@@ -40,6 +40,14 @@ void TreeModel::setTree(wt::Tree* t)
     endResetModel();
 }
 
+std::vector<uint32_t> TreeModel::compactTree()
+{
+    beginResetModel();
+    auto mapping = tree_->compact();
+    endResetModel();
+    return mapping;
+}
+
 void TreeModel::setShowAllocated(bool on)
 {
     if (showAllocated_ == on) return;

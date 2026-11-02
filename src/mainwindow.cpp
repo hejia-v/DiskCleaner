@@ -197,10 +197,12 @@ MainWindow::MainWindow()
 MainWindow::~MainWindow()
 {
     closing_ = true;
+    cancel_ = true;
+    dumpCancel_ = true;
     deletionWatcher_->stop();
     stopLiveUpdates();
-    cancel_ = true;
     if (worker_.joinable()) worker_.join();
+    if (dumpWorker_.joinable()) dumpWorker_.join();
 }
 
 void MainWindow::buildUi()
@@ -1039,7 +1041,12 @@ void MainWindow::startScan(const QString& target, wchar_t letter, bool isDrive)
 
 void MainWindow::startScanPath(const QString& target, wchar_t letter, int mode)
 {
-    if (scanning_) return;
+    if (scanning_ || dumping_ || closing_) return;
+    if (liveBusy_) {
+        liveCancel_ = true;
+        pendingScan_ = [this, target, letter, mode] { startScanPath(target, letter, mode); };
+        return;
+    }
     if (worker_.joinable()) worker_.join();
 
     if (mode == 0) {
@@ -1072,11 +1079,13 @@ void MainWindow::startScanPath(const QString& target, wchar_t letter, int mode)
     };
 
     worker_ = std::thread([this, target, letter, mode, opt]() mutable {
-        wt::ScanResult r;
-        if (mode == 1) r = wt::scanDrive(letter, opt);
-        else if (mode == 2) r = wt::scanMftDump(target, opt);
-        else if (mode == 3) r = wt::importCsvTree(target, opt);
-        else r = wt::scanFolder(target, opt);
+        wt::ScanResult r = wt::runScanTask([&] {
+            if (mode == 1) return wt::scanDrive(letter, opt);
+            if (mode == 2) return wt::scanMftDump(target, opt);
+            if (mode == 3) return wt::importCsvTree(target, opt);
+            return wt::scanFolder(target, opt);
+        });
+        if (cancel_.load()) { r.ok = false; r.error = QStringLiteral("canceled"); }
         auto shared = std::make_shared<wt::ScanResult>(std::move(r));
         QMetaObject::invokeMethod(
             this, [this, shared] { onScanFinished(shared); }, Qt::QueuedConnection);
@@ -1087,17 +1096,17 @@ void MainWindow::onScanFinished(const std::shared_ptr<wt::ScanResult>& r)
 {
     if (worker_.joinable()) worker_.join();
     scanning_ = false;
+    if (closing_) { close(); return; }
     setBusy(false);
 
-    if (closing_) return;
-    if (!r || !r->ok) {
+    if (!r || !r->ok || cancel_.load()) {
         deletionWatcher_->stop();
         statusLabel_->setText(tr("Scan failed"));
-        scanStateLabel_->setText(r && r->error == QLatin1String("canceled")
+        scanStateLabel_->setText(cancel_.load() || (r && r->error == QLatin1String("canceled"))
                                     ? tr("Scan canceled") : tr("Scan failed"));
         updateStats();
         updateSelectionInfo();
-        if (r && !r->error.isEmpty() && r->error != QLatin1String("canceled") && !batchMode_)
+        if (!cancel_.load() && r && !r->error.isEmpty() && r->error != QLatin1String("canceled") && !batchMode_)
             QMessageBox::warning(this, tr("Error"), r->error);
         return;
     }
@@ -1210,11 +1219,23 @@ void MainWindow::flushDeletions()
     const auto generation = liveGeneration_;
     liveCancel_ = false; liveBusy_ = true;
     liveWorker_ = std::thread([this, changes, knownDirectories, generation] {
-        auto update = std::make_shared<wt::LiveUpdate>(wt::readLiveUpdate(changes, knownDirectories, liveCancel_));
-        QMetaObject::invokeMethod(this, [this, generation, update] {
-            if (generation != liveGeneration_ || closing_) return;
+        auto update = std::make_shared<wt::LiveUpdate>();
+        const auto outcome = wt::runScanTask([&] {
+            *update = wt::readLiveUpdate(changes, knownDirectories, liveCancel_);
+            wt::ScanResult result; result.ok = true; return result;
+        });
+        QMetaObject::invokeMethod(this, [this, generation, update, error = outcome.error] {
             if (liveWorker_.joinable()) liveWorker_.join();
             liveBusy_ = false;
+            if (closing_) { close(); return; }
+            if (pendingScan_) {
+                auto scan = std::move(pendingScan_);
+                pendingScan_ = {};
+                scan();
+                return;
+            }
+            if (generation != liveGeneration_) return;
+            if (!error.isEmpty()) { statusLabel_->setText(error); return; }
             readyUpdate_ = std::make_unique<wt::LiveUpdate>(std::move(*update));
             flushDeletions();
         }, Qt::QueuedConnection);
@@ -1303,6 +1324,46 @@ void MainWindow::applyLiveResult(const wt::LiveUpdate& update)
     extModel_->applyUpdate(shown, node, delta, unit_);
     const auto& root = result_->tree.nodes[result_->tree.root];
     statusLabel_->setText(tr("Live update: %1 files, %2 folders").arg(root.files).arg(root.folders));
+    compactLiveTree();
+}
+
+void MainWindow::compactLiveTree()
+{
+    if (!result_ || !result_->tree.needsCompaction()) return;
+    if (filteredTree_) { result_->tree.compact(); return; }
+    QScopedValueRollback<bool> guard(syncingTreemapSelection_, true);
+    const auto selected = treeModel_->nodeOf(treeView_->currentIndex());
+    const auto expanded = expandedNodes_;
+    const auto files = selectedNodes(fileView_);
+    const auto currentFile = fileModel_->nodeAt(fileView_->currentIndex().row());
+    const int treeScroll = treeView_->verticalScrollBar()->value();
+    const int fileScroll = fileView_->verticalScrollBar()->value();
+    const auto mapping = treeModel_->compactTree();
+    const auto remap = [&](uint32_t id) { return id < mapping.size() ? mapping[id] : wt::kNone; };
+    expandedNodes_.clear();
+    for (auto id : expanded) {
+        const auto index = treeModel_->indexForNode(remap(id));
+        if (index.isValid()) treeView_->expand(index);
+    }
+    fileModel_->setTree(&result_->tree);
+    // Remap the treemap before selection signals can ask it to render again.
+    treemap_->remapNodes(mapping);
+    onSearchChanged();
+    QSet<uint32_t> selectedFiles;
+    for (auto id : files) if (remap(id) != wt::kNone) selectedFiles.insert(remap(id));
+    for (int row = 0; row < fileModel_->rowCount(); ++row) {
+        const auto id = fileModel_->nodeAt(row);
+        if (selectedFiles.contains(id))
+            fileView_->selectionModel()->select(fileModel_->index(row, 0), QItemSelectionModel::Select | QItemSelectionModel::Rows);
+        if (id == remap(currentFile))
+            fileView_->selectionModel()->setCurrentIndex(fileModel_->index(row, 0), QItemSelectionModel::NoUpdate);
+    }
+    treeView_->setCurrentIndex(treeModel_->indexForNode(remap(selected)));
+    treeView_->verticalScrollBar()->setValue(treeScroll);
+    fileView_->verticalScrollBar()->setValue(fileScroll);
+    refreshExtensions();
+    updateSelectionInfo();
+    updateTreemapBreadcrumb();
 }
 
 void MainWindow::setBusy(bool busy)
@@ -2286,6 +2347,7 @@ void MainWindow::openMftDump()
 
 void MainWindow::dumpMftFile()
 {
+    if (scanning_ || dumping_ || closing_) return;
     const int idx = driveBox_->currentIndex();
     if (idx <= 0) {
         QMessageBox::information(this, tr("Dump MFT File"), tr("Please select a drive first."));
@@ -2296,23 +2358,45 @@ void MainWindow::dumpMftFile()
                                                 QDir::homePath() + QStringLiteral("/mft.mft"),
                                                 tr("MFT files (*.mft);;All files (*.*)"));
     if (path.isEmpty()) return;
-    cancel_ = false;
-    QProgressDialog dlg(tr("Dumping MFT file, please wait..."), tr("Cancel"), 0, 0, this);
-    dlg.setWindowModality(Qt::WindowModal);
-    dlg.setMinimumDuration(0);
-    connect(&dlg, &QProgressDialog::canceled, this, [this] { cancel_ = true; });
-    const wt::ScanResult r = wt::dumpMftToFile(letter, path, cancel_, [&](const QString& st) {
-        dlg.setLabelText(st);
-        QApplication::processEvents();
+    startMftDump(letter, path);
+}
+
+void MainWindow::startMftDump(wchar_t letter, const QString& path, DumpFunction dump)
+{
+    if (scanning_ || dumping_ || closing_) return;
+    if (dumpWorker_.joinable()) dumpWorker_.join();
+    dumping_ = true;
+    dumpCancel_ = false;
+    dumpProgress_ = new QProgressDialog(tr("Dumping MFT file, please wait..."), tr("Cancel"), 0, 0, this);
+    dumpProgress_->setWindowModality(Qt::WindowModal);
+    dumpProgress_->setMinimumDuration(0);
+    dumpProgress_->setAutoClose(false);
+    dumpProgress_->setAutoReset(false);
+    connect(dumpProgress_, &QProgressDialog::canceled, this, [this] { dumpCancel_ = true; });
+    dumpProgress_->show();
+    dumpWorker_ = std::thread([this, letter, path, dump = std::move(dump)] {
+        auto result = wt::runScanTask([&] {
+            return dump(letter, path, dumpCancel_, [this](const QString& status) {
+                QMetaObject::invokeMethod(this, [this, status] {
+                    if (dumpProgress_) dumpProgress_->setLabelText(status);
+                }, Qt::QueuedConnection);
+            });
+        });
+        QMetaObject::invokeMethod(this, [this, path, result = std::move(result)] {
+            if (dumpWorker_.joinable()) dumpWorker_.join();
+            dumping_ = false;
+            dumpProgress_->hide();
+            dumpProgress_->deleteLater();
+            dumpProgress_ = nullptr;
+            if (closing_) { close(); return; }
+            if (result.ok) statusLabel_->setText(tr("MFT data dumped to file %1").arg(path));
+            else if (result.error == QLatin1String("canceled")) statusLabel_->setText(tr("MFT Dump cancelled..."));
+            else {
+                statusLabel_->setText(result.error);
+                if (!batchMode_) QMessageBox::warning(this, tr("Dump MFT File"), result.error);
+            }
+        }, Qt::QueuedConnection);
     });
-    if (!r.ok) {
-        if (r.error != QLatin1String("canceled"))
-            QMessageBox::warning(this, tr("Dump MFT File"), r.error);
-        else
-            statusLabel_->setText(tr("MFT Dump cancelled..."));
-        return;
-    }
-    statusLabel_->setText(tr("MFT data dumped to file %1").arg(path));
 }
 
 void MainWindow::selectMultiple()
@@ -2378,7 +2462,12 @@ void MainWindow::selectMultiple()
 
 void MainWindow::startMultiScan(const QStringList& targets)
 {
-    if (scanning_ || targets.isEmpty()) return;
+    if (scanning_ || dumping_ || closing_ || targets.isEmpty()) return;
+    if (liveBusy_) {
+        liveCancel_ = true;
+        pendingScan_ = [this, targets] { startMultiScan(targets); };
+        return;
+    }
     if (worker_.joinable()) worker_.join();
 
     watchScanMode_ = -1; // preserve multi-scan and MFT selection during overflow recovery
@@ -2404,26 +2493,31 @@ void MainWindow::startMultiScan(const QStringList& targets)
     };
 
     worker_ = std::thread([this, targets, opt]() mutable {
-        std::vector<wt::Tree> parts;
-        uint64_t totalRecords = 0;
-        int index = 0;
-        for (const QString& target : targets) {
-            if (cancel_.load(std::memory_order_relaxed)) break;
-            ++index;
-            opt.status(tr("Scanning %1 of %2: %3").arg(index).arg(targets.size()).arg(target));
-            const bool isDrive = target.size() == 3 && target.at(1) == QLatin1Char(':');
-            wt::ScanResult r = isDrive ? wt::scanDrive(target.at(0).unicode(), opt)
-                                       : wt::scanFolder(target, opt);
-            if (r.ok) {
-                totalRecords += r.records;
-                parts.push_back(std::move(r.tree));
+        auto result = wt::runScanTask([&] {
+            std::vector<wt::Tree> parts;
+            uint64_t totalRecords = 0;
+            int index = 0;
+            for (const QString& target : targets) {
+                if (cancel_.load(std::memory_order_relaxed)) break;
+                ++index;
+                opt.status(tr("Scanning %1 of %2: %3").arg(index).arg(targets.size()).arg(target));
+                const bool isDrive = target.size() == 3 && target.at(1) == QLatin1Char(':');
+                wt::ScanResult r = isDrive ? wt::scanDrive(target.at(0).unicode(), opt)
+                                           : wt::scanFolder(target, opt);
+                if (r.ok) {
+                    totalRecords += r.records;
+                    parts.push_back(std::move(r.tree));
+                }
             }
-        }
-        auto shared = std::make_shared<wt::ScanResult>();
-        shared->records = totalRecords;
-        shared->tree = wt::mergeTrees(parts, tr("Multiple selections"));
-        shared->ok = !parts.empty();
-        if (!shared->ok) shared->error = tr("No targets scanned");
+            wt::ScanResult result;
+            result.records = totalRecords;
+            result.tree = wt::mergeTrees(parts, tr("Multiple selections"), &cancel_);
+            result.ok = !parts.empty();
+            if (!result.ok) result.error = tr("No targets scanned");
+            return result;
+        });
+        if (cancel_.load()) { result.ok = false; result.error = QStringLiteral("canceled"); }
+        auto shared = std::make_shared<wt::ScanResult>(std::move(result));
         QMetaObject::invokeMethod(this, [this, shared] { onScanFinished(shared); },
                                   Qt::QueuedConnection);
     });
@@ -2571,11 +2665,20 @@ void MainWindow::saveSettings()
 void MainWindow::closeEvent(QCloseEvent* e)
 {
     closing_ = true;
+    cancel_ = true;
+    liveCancel_ = true;
+    dumpCancel_ = true;
+    pendingScan_ = {};
+    deletionTimer_->stop();
+    searchTimer_->stop();
+    extTimer_->stop();
+    // Completion callbacks retry close. Never join an active I/O task on the UI thread.
+    if (scanning_ || liveBusy_ || dumping_) {
+        e->ignore();
+        return;
+    }
     deletionWatcher_->stop();
     stopLiveUpdates();
-    deletionTimer_->stop();
-    cancel_ = true;
-    if (worker_.joinable()) worker_.join();
     saveSettings();
     QMainWindow::closeEvent(e);
 }

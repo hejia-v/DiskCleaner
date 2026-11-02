@@ -26,6 +26,7 @@ class QSplitter;
 class QTimer;
 class QAction;
 class QDockWidget;
+class QProgressDialog;
 class TreeModel;
 class FileListModel;
 class ExtensionModel;
@@ -101,6 +102,10 @@ private slots:
     void setUnit(int mode);
 
 private:
+    friend class ResourceTests;
+    using DumpFunction = std::function<wt::ScanResult(wchar_t, const QString&, std::atomic_bool&, const wt::StatusFn&)>;
+    void startMftDump(wchar_t letter, const QString& path, DumpFunction dump = wt::dumpMftToFile);
+    void compactLiveTree();
     void buildUi();
     void buildMenus();
     void refreshDrives();
@@ -133,6 +138,11 @@ private:
     wt::Tree* displayTree() const;
     void writeCsv(const QString& path, const ExportOptions& opt);
     std::function<void()> onScanDone_;
+    std::function<void()> pendingScan_;
+    std::thread dumpWorker_;
+    std::atomic_bool dumpCancel_{false};
+    bool dumping_ = false;
+    QProgressDialog* dumpProgress_ = nullptr;
 
     QComboBox* driveBox_ = nullptr;
     QLineEdit* scanPathEdit_ = nullptr;

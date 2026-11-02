@@ -26,6 +26,8 @@ pwsh -NoProfile -File tools\smoke.ps1
 
 `tests/` 包含自动化回归测试，`work/sample` 和 `work/dups` 是冒烟测试所需的输入夹具；测试输出写入 `work/smoke`。`smoke/` 是独立的 Qt 环境检查程序。
 
+`ResourceTests` 覆盖异常 MFT 长度/记录数、稀疏记录编号、扫描取消与句柄释放、实时增删/改名后的存储压缩和界面状态，以及后台 MFT 导出和异步关闭。导出界面测试使用可控的 I/O 替身，不需要管理员权限或访问真实磁盘；单个 CTest 测试目标超时为 90 秒。
+
 使用 `build\DiskCleaner.exe --help` 查看命令行参数。
 
 ## 主界面与统计口径

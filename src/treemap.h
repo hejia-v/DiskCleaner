@@ -46,6 +46,7 @@ public:
     void clearTags();
     void refresh();
     void remapTags(const QList<QPair<QString, QString>>& renames);
+    void remapNodes(const std::vector<uint32_t>& mapping);
     void refreshAfterRemoval(const wt::Removal& removal, quint64 scannedAllocated,
                              quint64 freeBytes, quint64 totalBytes);
     // Offscreen export uses the same layout without changing navigation/selection.
@@ -69,6 +70,7 @@ protected:
 
 private:
     friend class TreemapTests;
+    friend class ResourceTests;
     enum class Space { None, Free, Unknown };
     struct Cell {
         QRectF rect;
