@@ -1,4 +1,5 @@
 /build/
+/dist/
 /smoke/build/
 /.codex_tmp/
 /work/*

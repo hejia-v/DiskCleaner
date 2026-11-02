@@ -3,7 +3,7 @@
 
 $ErrorActionPreference = 'Continue'
 $root = Split-Path -Parent $PSScriptRoot
-$exe = Join-Path $root 'build\DiskCleaner.exe'
+$exe = Join-Path $root 'dist\Release\DiskCleaner.exe'
 $tmp = Join-Path $root 'work\smoke'
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 $env:PATH = "C:\Qt\6.11.2\mingw_64\bin;$env:PATH"

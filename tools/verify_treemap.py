@@ -27,7 +27,7 @@ def main():
     env = os.environ.copy()
     env["PATH"] = "C:/Qt/6.11.2/mingw_64/bin;" + env["PATH"]
     env["QT_FORCE_STDERR_LOGGING"] = "1"
-    exe = root / "build" / "DiskCleaner.exe"
+    exe = root / "dist" / "Release" / "DiskCleaner.exe"
 
     def run(name, command, timeout=90):
         result = subprocess.run(command, cwd=root, env=env, shell=False,

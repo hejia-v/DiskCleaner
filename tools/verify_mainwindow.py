@@ -75,7 +75,7 @@ def main() -> int:
         for name, theme, geometry, tab, scan, scale in shots:
             settings.write_text("[General]\nfilterscanresults=false\ntreemapDetail=3\n"
                                 "treemapClasses=false\ntreemapAllocated=true\n", encoding="utf-8")
-            command = [str(root / "build/DiskCleaner.exe"), "-qwindowgeometry", geometry + "+0+0",
+            command = [str(root / "dist/Release/DiskCleaner.exe"), "-qwindowgeometry", geometry + "+0+0",
                        "--theme", theme, "--lang", "en" if name == "english" else "zh_CN", "--tab", str(tab),
                        "--shot", str(output / f"{name}.png"), "--delay", "2000"]
             if scan:

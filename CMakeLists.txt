@@ -28,6 +28,25 @@ set(DiskCleaner_SOURCES
 
 qt_add_executable(DiskCleaner src/main.cpp ${DiskCleaner_SOURCES})
 
+# Stable application location, independent of generator and binary directory.
+if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build configuration" FORCE)
+endif()
+set_target_properties(DiskCleaner PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/dist/$<CONFIG>")
+if(WIN32)
+    target_sources(DiskCleaner PRIVATE resources/app.rc)
+    get_target_property(qt_qmake_executable Qt6::qmake IMPORTED_LOCATION)
+    get_filename_component(qt_bin_directory "${qt_qmake_executable}" DIRECTORY)
+    find_program(DISK_CLEANER_WINDEPLOYQT windeployqt HINTS "${qt_bin_directory}" REQUIRED)
+    add_custom_command(TARGET DiskCleaner POST_BUILD
+        COMMAND "${DISK_CLEANER_WINDEPLOYQT}" --no-translations
+                --no-system-d3d-compiler --no-opengl-sw
+                --dir "$<TARGET_FILE_DIR:DiskCleaner>" "$<TARGET_FILE:DiskCleaner>"
+        COMMENT "Deploying Qt runtime to the fixed application directory"
+        VERBATIM)
+endif()
+
 target_link_libraries(DiskCleaner PRIVATE Qt6::Widgets Qt6::Network Qt6::Svg)
 target_compile_definitions(DiskCleaner PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_link_libraries(DiskCleaner PRIVATE shell32 advapi32)

@@ -1,4 +1,5 @@
 #include <QApplication>
+#include <QIcon>
 #include <cstdio>
 #include <QSettings>
 #include <QTranslator>
@@ -23,6 +24,7 @@ int main(int argc, char** argv)
     QApplication::setApplicationName(QStringLiteral("DiskCleaner"));
     QApplication::setApplicationVersion(QStringLiteral("0.1"));
     QApplication::setApplicationDisplayName(QStringLiteral("DiskCleaner"));
+    QApplication::setWindowIcon(QIcon(QStringLiteral(":/ui/app.ico")));
 
 
     if (app.arguments().contains(QStringLiteral("--help")) ||

@@ -18,8 +18,16 @@ Set-Location C:\Dev\DiskCleaner
 $env:PATH = 'C:\Qt\Tools\mingw1310_64\bin;C:\Qt\Tools\Ninja;C:\Qt\6.11.2\mingw_64\bin;' + $env:PATH
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++ -DCMAKE_PREFIX_PATH=C:/Qt/6.11.2/mingw_64 -DDISK_CLEANER_BUILD_TESTS=ON
 cmake --build build -j 8
-.\build\DiskCleaner.exe
+.\dist\Release\DiskCleaner.exe
 ```
+
+正式程序固定生成到 `dist/Release/`，Debug 配置生成到 `dist/Debug/`，与 CMake
+构建缓存位置无关。构建会自动部署 Qt 和编译器运行库，直接启动上述 EXE 即可；
+分发时复制整个配置目录。`build/` 只用于构建缓存和测试工具，旧的
+`build/DiskCleaner.exe` 不再更新。相关约束见 [AGENTS.md](AGENTS.md)。
+
+应用图标源图为 `resources/app.png`，Windows 图标为 `resources/app.ico`，包含
+16、20、24、32、40、48、64、128、256 像素尺寸，同时嵌入 EXE 和 Qt 窗口资源。
 
 ## 验证
 
@@ -35,7 +43,7 @@ pwsh -NoProfile -File tools\smoke.ps1
 
 `ResourceTests` 覆盖异常 MFT 长度/记录数、稀疏记录编号、扫描取消与句柄释放、实时增删/改名后的存储压缩和界面状态，以及后台 MFT 导出和异步关闭。导出界面测试使用可控的 I/O 替身，不需要管理员权限或访问真实磁盘；单个 CTest 测试目标超时为 90 秒。
 
-使用 `build\DiskCleaner.exe --help` 查看命令行参数。
+使用 `dist\Release\DiskCleaner.exe --help` 查看命令行参数。
 
 ## 主界面与统计口径
 
