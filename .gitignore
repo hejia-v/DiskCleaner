@@ -1,0 +1,8 @@
+/build/
+/smoke/build/
+/.codex_tmp/
+/work/*
+!/work/sample/
+!/work/dups/
+__pycache__/
+*.pyc
