@@ -20,7 +20,7 @@ def main():
         print(f"Evidence directory: {output}")
         return 0
     output.mkdir(parents=True, exist_ok=True)
-    exe = root / "dist/DiskCleaner.exe"
+    exe = root / "dist/Release/DiskCleaner.exe"
 
     def run(name, command, timeout=90):
         result = subprocess.run(command, cwd=root, shell=False,

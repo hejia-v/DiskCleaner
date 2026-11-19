@@ -567,3 +567,13 @@ pub fn clipboard_files(hwnd: HWND, paths: &[std::path::PathBuf], cut: bool) -> R
         result
     }
 }
+pub fn client_animations_enabled() -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SPI_GETCLIENTAREAANIMATION, SystemParametersInfoW,
+    };
+    let mut enabled = 0i32;
+    unsafe {
+        SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, (&raw mut enabled).cast(), 0) != 0
+            && enabled != 0
+    }
+}

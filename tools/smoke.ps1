@@ -3,7 +3,7 @@
 
 $ErrorActionPreference = 'Continue'
 $root = Split-Path -Parent $PSScriptRoot
-$exe = Join-Path $root 'dist\DiskCleaner.exe'
+$exe = Join-Path $root 'dist\Release\DiskCleaner.exe'
 $runId = [guid]::NewGuid().ToString('N')
 $results = Join-Path $root 'work\smoke'
 $tmp = Join-Path $results ('.running-' + $runId)

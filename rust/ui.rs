@@ -200,7 +200,10 @@ struct Dashboard {
     chart_size: Size<Pixels>,
     list_viewports: [Size<Pixels>; 2],
     split: f32,
-    resizing: bool,
+    split_drag: Option<(Pixels, f32)>,
+    motion_enabled: bool,
+    // Previous scope and the target's old bounds, when zooming into a visible cell.
+    map_transition: Option<(std::time::Instant, usize, Option<Rect>)>,
     drag_origin: Option<(usize, Point<Pixels>)>,
     dragging: bool,
     scoped_types: Option<(usize, TypeRows)>,
@@ -243,6 +246,7 @@ struct Dashboard {
     editing: &'static str,
     rename_source: Option<PathBuf>,
     status: String,
+    snapshot_dirty: bool,
     zh: bool,
     dark: bool,
     unit: usize,
@@ -395,7 +399,9 @@ impl Dashboard {
             chart_size: Default::default(),
             list_viewports: Default::default(),
             split: (pref_num("splitPercent", 48).clamp(20, 80) as f32) / 100.,
-            resizing: false,
+            split_drag: None,
+            motion_enabled: platform::client_animations_enabled(),
+            map_transition: None,
             drag_origin: None,
             dragging: false,
             scoped_types: None,
@@ -451,6 +457,7 @@ impl Dashboard {
             labels: pref_num("treemapNames", 1) != 0,
             min_cell: pref_num("treemapMinPixels", 2).clamp(1, 40) as f32,
             watch: None,
+            snapshot_dirty: false,
             events: None,
             removed: HashSet::new(),
             tags: HashMap::new(),
@@ -862,6 +869,7 @@ impl Dashboard {
                         s.selected = 0;
                         s.explicit_selection = false;
                         s.root = 0;
+                        s.map_transition = None;
                         s.history.clear();
                         s.future.clear();
                         s.tags.clear();
@@ -982,6 +990,7 @@ impl Dashboard {
         cx: &mut Context<Self>,
     ) {
         self.watch = None;
+        self.snapshot_dirty = false;
         self.events = None;
         if !self.tree.as_ref().is_some_and(|t| t.live) {
             return;
@@ -1063,12 +1072,7 @@ impl Dashboard {
                         if dirty {
                             s.rebuild();
                         }
-                        s.status = s
-                            .text(
-                                "Disk changed · Press F5 to refresh snapshot",
-                                "磁盘内容已更改 · 按 F5 刷新快照",
-                            )
-                            .into();
+                        s.snapshot_dirty = true;
                         cx.notify()
                     }
                     true
@@ -1133,10 +1137,23 @@ impl Dashboard {
         if self.root != id {
             self.history.push(self.root);
             self.future.clear();
-            self.root = id
+            self.change_map_root(id);
         }
         self.selected = id;
         self.explicit_selection = false;
+    }
+    fn change_map_root(&mut self, id: usize) {
+        if self.motion_enabled {
+            let from = self
+                .chart
+                .get_mut()
+                .as_ref()
+                .filter(|(root, _, _, _, _)| *root == self.root)
+                .and_then(|(_, _, _, _, cells)| cells.iter().find(|c| c.id == id))
+                .map(|c| c.rect);
+            self.map_transition = Some((std::time::Instant::now(), self.root, from));
+        }
+        self.root = id;
     }
     fn sync_file_selection(&mut self, scroll: bool) {
         if !self.explicit_selection {
@@ -1248,7 +1265,12 @@ impl Dashboard {
             self.view.tree_rows(t, &self.expanded);
         }
         if let Some(row) = self.view.rows.iter().position(|&(n, _)| n == id) {
-            self.tree_scroll.scroll_to_item(row, ScrollStrategy::Center);
+            let edge = if row <= top_row(&self.tree_scroll) {
+                ScrollStrategy::Top
+            } else {
+                ScrollStrategy::Bottom
+            };
+            self.tree_scroll.scroll_to_item(row, edge);
         }
     }
     fn select_map_item(&mut self, id: usize, zoom: bool, cx: &mut Context<Self>) {
@@ -1287,13 +1309,12 @@ impl Dashboard {
         if (self.pane == 0 || changed)
             && ((open && self.pane == 0)
                 || !t.within(id, self.root)
-                || self
-                    .chart
-                    .borrow()
-                    .as_ref()
-                    .is_none_or(|(root, _, _, _, cells)| {
+                || self.chart.borrow().as_ref().map_or(
+                    id != self.root && t.nodes[id].parent != self.root,
+                    |(root, _, _, _, cells)| {
                         *root != self.root || !cells.iter().any(|cell| cell.id == id)
-                    }))
+                    },
+                ))
         {
             self.navigate(dest);
             self.chart.get_mut().take();
@@ -1916,7 +1937,8 @@ impl Dashboard {
                 "back" => {
                     if let Some(id) = self.history.pop() {
                         self.future.push(self.root);
-                        self.root = id;
+                        self.change_map_root(id);
+                        self.reveal_tree_row(id);
                         self.selected = id;
                         self.explicit_selection = false;
                     }
@@ -1924,7 +1946,8 @@ impl Dashboard {
                 "forward" => {
                     if let Some(id) = self.future.pop() {
                         self.history.push(self.root);
-                        self.root = id;
+                        self.change_map_root(id);
+                        self.reveal_tree_row(id);
                         self.selected = id;
                         self.explicit_selection = false;
                     }

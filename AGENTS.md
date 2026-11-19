@@ -12,12 +12,12 @@
 | --- | --- |
 | CMake 配置、生成器文件和 CTest 日志 | `build/` |
 | Cargo 编译、测试、Clippy 及构建脚本产物 | `build/cargo/` |
-| 所有配置共用的唯一打包目录 | `dist/` |
+| 各配置唯一打包目录 | `dist/<配置>/` |
 | 验证截图、导出和日志 | `work/` |
 
 - 从仓库根目录、Windows x64 Developer PowerShell 执行 README 的 CMake 命令。日常开发验证和交付默认使用 Release。只有需要调试时才构建 Debug，复用 `build/`，结束后切回 Release。
 - CMake 统一调用 Cargo 并使用 `Cargo.lock`。直接运行 Cargo 也使用仓库的 `.cargo/config.toml`，例如 `cargo test --locked --release` 和 `cargo clippy --locked --release --all-targets`。避免通过环境变量、`--target-dir` 或 IDE 配置把 target 或 build-dir 指向其他位置。
-- 仅由根 `CMakeLists.txt` 的目标属性指定部署位置。所有配置共用 `dist/DiskCleaner.exe` 和 `dist/vcruntime140.dll`。禁止另建配置、版本或日期打包目录。正式交付前最后构建 Release，使用 `ctest --test-dir build -C Release --output-on-failure` 核对分发清单及 EXE 与当前配置的哈希。编译输出和验证产物不提交，修改路径约定时同步更新相关配置、README 和验证脚本。
+- 仅由根 `CMakeLists.txt` 的目标属性指定部署位置。Release 入口为 `dist/Release/DiskCleaner.exe`，其他配置使用 `dist/<配置>/DiskCleaner.exe`，同目录部署 x64 VC 运行库。正式交付前最后构建 Release，使用 `ctest --test-dir build -C Release --output-on-failure` 核对分发清单及 EXE 与当前配置的哈希。编译输出和验证产物不提交，修改路径约定时同步更新相关配置、README 和验证脚本。
 - 切换配置和重复打包均在唯一发布路径原位覆盖。先比较 EXE 和运行库的内容，相同文件跳过。需要替换时，按目标 EXE 的绝对路径识别并终止该路径启动的所有实例，等待退出后再覆盖；这是打包流程的既定授权，无需另行询问。其他路径的同名进程继续运行。
 - 打包失败时修复原因并重试同一目标。禁止通过另存带版本号、时间戳、序号或 `.bak` 的副本来绕过占用。部署临时文件在替换后清理。
 

@@ -130,7 +130,11 @@ impl Dashboard {
                 .to_string_lossy()
                 .replace(['\n', '\r'], " ")
                 .into();
-            let run = w.text_style().to_run(label.len());
+            let mut style = w.text_style();
+            if id == self.root {
+                style.font_weight = FontWeight::SEMIBOLD;
+            }
+            let run = style.to_run(label.len());
             let line = w
                 .text_system()
                 .shape_line(label.clone(), px(14.), &[run], None);
@@ -207,6 +211,16 @@ impl Dashboard {
                 );
             }
             let current = id == self.root;
+            let weight = if current {
+                FontWeight::SEMIBOLD
+            } else {
+                FontWeight::NORMAL
+            };
+            let label = if width > cap {
+                fit_name(label, px(cap - 8.), weight, w)
+            } else {
+                label
+            };
             let tree = tree.clone();
             let crumb = div()
                 .id(("crumb", id))
@@ -500,7 +514,7 @@ impl Dashboard {
             ))
     }
 
-    pub(super) fn heading(&self, cx: &Context<Self>) -> Div {
+    pub(super) fn heading(&self, width: f32, cx: &Context<Self>) -> Div {
         let t = |en, zh| self.text(en, zh);
         let loaded = !self.menu && self.pane != 2 && self.tree.is_some();
         if loaded && self.location_editor && self.cancel.is_none() {
@@ -520,35 +534,66 @@ impl Dashboard {
                 _ => t("Disk overview", "空间概览"),
             }
         };
+        if !loaded {
+            return div()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_size(px(23.))
+                .child(title);
+        }
+        let location = self.snapshot_location();
+        let hint = format!("{} · {}", location, t("Change location", "更改位置"));
+        let display_location = if width < 710. && self.sources.len() == 1 {
+            std::path::Path::new(&location)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(&location)
+        } else {
+            &location
+        };
+        let refresh_hint = if self.snapshot_dirty {
+            t(
+                "Disk changed · Refresh snapshot (F5)",
+                "磁盘内容已变更 · 刷新快照 (F5)",
+            )
+        } else {
+            t("Refresh snapshot (F5)", "刷新快照 (F5)")
+        };
+        let location_label = div()
+            .min_w_0()
+            .truncate()
+            .font_weight(FontWeight::SEMIBOLD)
+            .child(display_location.to_owned());
         div()
             .flex()
+            .flex_none()
+            .min_w_0()
             .items_center()
-            .gap_2()
+            .gap_1()
+            .child(if self.cancel.is_none() {
+                self.button("change-location", "", false, cx)
+                    .flex_shrink()
+                    .min_w_0()
+                    .max_w(px((width * 0.25).min(330.)))
+                    .gap_1()
+                    .child(glyph("\u{E8B7}", 15.))
+                    .child(location_label)
+                    .child(glyph("\u{E70D}", 10.))
+                    .tooltip(move |w, cx| Tooltip::new(hint.clone()).build(w, cx))
+                    .into_any_element()
+            } else {
+                location_label.max_w(px(width * 0.25)).into_any_element()
+            })
             .child(
                 div()
                     .flex_none()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_size(px(23.))
-                    .child(title),
+                    .w(px(1.))
+                    .h(px(16.))
+                    .mx_1()
+                    .bg(self.divider()),
             )
-            .when(loaded, |d| {
-                let location = self.snapshot_location();
-                let d = d
-                    .child(div().w(px(1.)).h(px(17.)).mx_1().bg(rgb(if self.dark {
-                        0x40506a
-                    } else {
-                        0xcbd5e4
-                    })))
-                    .child(
-                        div()
-                            .id("snapshot-location")
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_color(self.muted())
-                            .child(location.clone())
-                            .tooltip(move |w, cx| Tooltip::new(location.clone()).build(w, cx)),
-                    );
+            .child(self.summary(width))
+            .child(div().flex_1())
+            .map(|d| {
                 if self.cancel.is_some() {
                     return d.when(self.scan_items.is_none(), |d| {
                         d.child(self.button("cancel", t("Cancel export", "取消导出"), false, cx))
@@ -557,13 +602,19 @@ impl Dashboard {
                 let handle = cx.weak_entity();
                 let focus = self.focus.clone();
                 let zh = self.zh;
-                d.child(self.button(
-                    "change-location",
-                    t("Change location", "更改位置"),
-                    false,
-                    cx,
-                ))
-                .child(self.button("refresh", t("Refresh", "刷新"), false, cx))
+                d.when(self.snapshot_dirty && width >= 740., |d| {
+                    d.child(
+                        div()
+                            .flex_none()
+                            .text_xs()
+                            .text_color(self.muted())
+                            .child(t("Disk changed", "磁盘已变更")),
+                    )
+                })
+                .child(
+                    self.button("refresh", t("Refresh", "刷新"), self.snapshot_dirty, cx)
+                        .tooltip(move |w, cx| Tooltip::new(refresh_hint).build(w, cx)),
+                )
                 .child(
                     Button::new("export-menu")
                         .label(t("Export ▾", "导出 ▾"))
@@ -647,7 +698,7 @@ impl Dashboard {
             })
     }
 
-    pub(super) fn summary(&self, compact: bool) -> Div {
+    fn summary(&self, width: f32) -> Div {
         let t = |en, zh| self.text(en, zh);
         let root = &self.tree.as_ref().expect("loaded scan").nodes[0];
         let metric = if self.options.allocated {
@@ -655,33 +706,45 @@ impl Dashboard {
         } else {
             t("File size", "文件大小")
         };
-        let mut row = self
-            .panel()
-            .h(px(40.))
+        let totals = div()
             .flex_none()
             .flex()
             .items_center()
             .gap_2()
-            .px_3()
             .child(
                 div()
                     .text_color(self.muted())
-                    .child(t("Scan total", "扫描总计")),
+                    .child(if self.options.allocated {
+                        t("Scan on disk", "扫描占用")
+                    } else {
+                        t("Scan size", "扫描大小")
+                    }),
             )
             .child(
                 div()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_size(px(19.))
+                    .text_size(px(17.))
                     .child(format_size(root.weight(self.options.allocated), self.unit)),
             )
-            .child(div().text_color(self.muted()).child(metric))
-            .child(div().text_color(self.muted()).child(format!(
-                "·  {} {}  ·  {} {}",
-                root.files,
-                t("files", "个文件"),
-                root.folders,
-                t("folders", "个目录")
-            )));
+            .id("scan-totals")
+            .tooltip({
+                let info = format!(
+                    "{} · {} {} · {} {}",
+                    metric,
+                    root.files,
+                    t("files", "个文件"),
+                    root.folders,
+                    t("folders", "个目录")
+                );
+                move |w, cx| Tooltip::new(info.clone()).build(w, cx)
+            })
+            .into_any_element();
+        let mut row = div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(totals);
         if let Some((total, free)) = self.volume {
             let free_label = format!(
                 "{} {}",
@@ -698,9 +761,10 @@ impl Dashboard {
                 t("Capacity", "总容量"),
                 format_size(total, self.unit)
             );
-            row = row.child(div().flex_1()).child(
+            row = row.child(
                 Button::new("volume-details")
-                    .label(if compact {
+                    .compact()
+                    .label(if width < 710. {
                         t("Volume ▾", "卷容量 ▾").to_owned()
                     } else {
                         free_label.clone()
@@ -712,7 +776,15 @@ impl Dashboard {
                     }),
             );
         }
-        row
+        row.when(width >= 920., |d| {
+            d.child(div().text_xs().text_color(self.muted()).child(format!(
+                "{} {}  ·  {} {}",
+                root.files,
+                t("files", "个文件"),
+                root.folders,
+                t("folders", "个目录")
+            )))
+        })
     }
 
     fn location_input(&self, loaded: bool, cx: &Context<Self>) -> Div {

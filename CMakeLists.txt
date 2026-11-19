@@ -27,7 +27,7 @@ endif()
 set(cargo_target "${CMAKE_SOURCE_DIR}/build/cargo")
 set(cargo_profile "$<IF:$<CONFIG:Debug>,dev,release>")
 set(cargo_output "$<IF:$<CONFIG:Debug>,debug,release>")
-set(package_dir "$<TARGET_PROPERTY:DiskCleaner,RUNTIME_OUTPUT_DIRECTORY>")
+set(package_dir "$<TARGET_GENEX_EVAL:DiskCleaner,$<TARGET_PROPERTY:DiskCleaner,RUNTIME_OUTPUT_DIRECTORY>>")
 add_custom_target(DiskCleaner ALL
     COMMAND "${CARGO_EXECUTABLE}" build --locked --profile "${cargo_profile}" --target-dir "${cargo_target}"
     COMMAND "${CMAKE_COMMAND}"
@@ -38,7 +38,7 @@ add_custom_target(DiskCleaner ALL
         -P "${CMAKE_SOURCE_DIR}/tools/deploy.cmake"
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     USES_TERMINAL VERBATIM)
-set_target_properties(DiskCleaner PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/dist")
+set_target_properties(DiskCleaner PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/dist/$<CONFIG>")
 
 option(DISK_CLEANER_BUILD_TESTS "Enable Rust regression tests" ON)
 if(DISK_CLEANER_BUILD_TESTS)

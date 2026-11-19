@@ -1,4 +1,6 @@
 mod chrome;
+const WORKSPACE_PAD: f32 = 8.;
+
 use super::*;
 use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_component::scroll::{Scrollbar, ScrollbarShow};
@@ -62,6 +64,21 @@ fn file_column(i: usize, narrow: bool) -> Div {
         5 => col.w(px(145.)).text_right(),
         _ => col.w(px(78.)).text_right(),
     }
+}
+
+fn fit_name(
+    label: SharedString,
+    width: Pixels,
+    weight: FontWeight,
+    window: &Window,
+) -> SharedString {
+    let mut style = window.text_style();
+    style.font_weight = weight;
+    let mut runs = vec![style.to_run(label.len())];
+    window
+        .text_system()
+        .line_wrapper(style.font(), px(14.))
+        .truncate_line(label, width.max(px(0.)), "…", &mut runs)
 }
 
 fn parent_label(tree: &Tree, parent: usize, width: Pixels, window: &Window) -> String {
@@ -420,6 +437,9 @@ impl Dashboard {
     fn selection_accent(&self) -> Rgba {
         rgb(if self.dark { 0x88afff } else { 0x2759c5 })
     }
+    fn divider(&self) -> Rgba {
+        rgb(if self.dark { 0x38465e } else { 0xd8e1ed })
+    }
     fn button(
         &self,
         id: &'static str,
@@ -439,6 +459,19 @@ impl Dashboard {
         } else {
             (0xffffff, 0x32435d, 0xd5dfec)
         };
+        let quiet = !active
+            && matches!(
+                id,
+                "types"
+                    | "filter"
+                    | "change-location"
+                    | "refresh"
+                    | "tree-columns"
+                    | "colors"
+                    | "reveal"
+                    | "open"
+                    | "recycle"
+            );
         div()
             .id(id)
             .focusable()
@@ -450,12 +483,21 @@ impl Dashboard {
             .flex()
             .items_center()
             .justify_center()
-            .bg(rgb(bg))
+            .bg(if quiet {
+                transparent_black()
+            } else {
+                rgb(bg).into()
+            })
             .text_color(rgb(fg))
             .border_1()
-            .border_color(rgb(line))
+            .border_color(if quiet {
+                transparent_black()
+            } else {
+                rgb(line).into()
+            })
             .rounded_md()
             .cursor_pointer()
+            .active(|d| d.bg(rgb(if self.dark { 0x384f71 } else { 0xdce6f5 })))
             .hover(|s| {
                 s.border_color(rgb(0x7395dd)).bg(rgb(if primary {
                     0x284ba8
@@ -476,17 +518,12 @@ impl Dashboard {
                 ))
             })
             .child(label.into())
-            .when(
-                matches!(id, "prev-page" | "next-page" | "selection-page"),
-                |d| {
-                    d.on_key_down(cx.listener(move |s, key: &KeyDownEvent, w, cx| {
-                        if matches!(key.keystroke.key.as_str(), "enter" | "space") {
-                            cx.stop_propagation();
-                            s.action(id, w, cx);
-                        }
-                    }))
-                },
-            )
+            .on_key_down(cx.listener(move |s, key: &KeyDownEvent, w, cx| {
+                if matches!(key.keystroke.key.as_str(), "enter" | "space") {
+                    cx.stop_propagation();
+                    s.action(id, w, cx);
+                }
+            }))
             .on_click(cx.listener(move |s, _, w, cx| s.action(id, w, cx)))
     }
     fn line(&self) -> Div {
@@ -664,7 +701,7 @@ impl Dashboard {
         short: bool,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let narrow = name_width.is_some();
+        let narrow = flat && name_width.is_some();
         let two_lines = flat && (narrow || (self.options.dup != 0 && self.columns & 2 == 0));
         let file_order = self.file_order(narrow);
         let len = if flat {
@@ -821,7 +858,9 @@ impl Dashboard {
                         }));
                     let mut name_cell = div()
                         .when(!narrow, |d| d.flex_1())
-                        .when_some(name_width, |d, width| d.flex_none().w(width))
+                        .when_some(name_width.filter(|_| flat), |d, width| {
+                            d.flex_none().w(width)
+                        })
                         .min_w_0()
                         .flex()
                         .items_center()
@@ -859,10 +898,20 @@ impl Dashboard {
                             cx,
                         ));
                     }
-                    let name = if flat {
+                    let name: SharedString = if flat {
                         n.name.as_os_str()
                     } else {
                         n.display_name()
+                    }
+                    .to_string_lossy()
+                    .into_owned()
+                    .into();
+                    let name = if !flat && let Some(column) = name_width {
+                        // Expander, shell icon, two gaps and the indentation precede the text.
+                        let available = column - px(12. + 16. + 8. + (depth.min(10) * 10) as f32);
+                        fit_name(name, available, FontWeight::NORMAL, window)
+                    } else {
+                        name
                     };
                     let path_hint = path;
                     let parent = two_lines
@@ -876,13 +925,13 @@ impl Dashboard {
                                 div()
                                     .id(("entry-name", i))
                                     .when(!two_lines, |d| d.flex_1())
-                                    .when_some(name_width, |d, width| {
+                                    .when_some(name_width.filter(|_| flat), |d, width| {
                                         d.w(width).font_weight(FontWeight::MEDIUM)
                                     })
                                     .min_w_0()
                                     .truncate()
                                     .when(deleted, |s| s.line_through())
-                                    .child(name.to_string_lossy().into_owned())
+                                    .child(name)
                                     .tooltip(move |w, cx| {
                                         gpui_component::tooltip::Tooltip::new(
                                             path_hint.display().to_string(),
@@ -1103,10 +1152,11 @@ impl Dashboard {
         let Some(t) = &self.tree else { return chart };
         let view = cx.weak_entity();
         let measured = self.chart_size;
+        let dragging_split = self.split_drag.is_some();
         chart = chart.child(
             canvas(
                 move |bounds, _, cx| {
-                    if bounds.size != measured {
+                    if bounds.size != measured && !dragging_split {
                         cx.defer(move |cx| {
                             let _ = view.update(cx, |s, cx| {
                                 s.chart_size = bounds.size;
@@ -1171,7 +1221,7 @@ impl Dashboard {
             chart = chart.child(
                 div()
                     .id(("cell", id))
-                    .when(!self.resizing, |d| d.block_mouse_except_scroll())
+                    .when(!dragging_split, |d| d.block_mouse_except_scroll())
                     .tooltip(move |w, cx| {
                         let name = if id < map::UNKNOWN {
                             snapshot.path(id).display().to_string()
@@ -1203,21 +1253,16 @@ impl Dashboard {
                     .when(c.header > 0., |s| {
                         s.child(
                             div()
+                                .w_full()
                                 .h(px(c.header))
+                                .line_height(px(c.header))
                                 .px_2()
-                                .flex()
-                                .items_center()
+                                .truncate()
                                 .bg(rgb(map::folder_band(color)))
                                 .text_color(rgb(0xffffff))
                                 .text_xs()
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .truncate()
-                                        .child(map::label(t, id, self.zh)),
-                                ),
+                                .child(map::label(t, id, self.zh)),
                         )
                     })
                     .when(self.labels && leaf && r.fits_name(), |s| {
@@ -1267,6 +1312,22 @@ impl Dashboard {
             let r = cell.rect;
             let accent = self.selection_accent();
             let contrast = rgb(if self.dark { 0x16243b } else { 0xffffff });
+            if self.motion_enabled {
+                chart = chart.child(
+                    div()
+                        .absolute()
+                        .left(relative(r.x / width))
+                        .top(relative(r.y / height))
+                        .w(relative(r.w / width))
+                        .h(relative(r.h / height))
+                        .bg(accent)
+                        .with_animation(
+                            ("selection-flash", self.selected),
+                            Animation::new(Duration::from_millis(95)),
+                            |d, t| d.opacity(0.12 * (1. - t)),
+                        ),
+                );
+            }
             // Paint last so a directory outline sits above its children, without capturing clicks.
             chart = chart.child(
                 canvas(
@@ -1296,6 +1357,48 @@ impl Dashboard {
                 .h(relative(r.h / height)),
             );
         }
+        if let Some((start, previous, from)) = self.map_transition
+            && start.elapsed() < Duration::from_millis(150)
+        {
+            // Enter from the clicked block, or return to its footprint in the parent.
+            // Only the outline moves. Hit testing always uses the final layout.
+            let target = from.or_else(|| cells.iter().find(|c| c.id == previous).map(|c| c.rect));
+            if let Some(r) = target {
+                let accent = self.selection_accent();
+                chart = chart.child(
+                    canvas(
+                        |_, _, _| (),
+                        move |bounds, _, w, _| {
+                            let t = (start.elapsed().as_secs_f32() / 0.15).min(1.);
+                            if t >= 1. {
+                                return;
+                            }
+                            let remaining = (1. - t).powi(2);
+                            let fraction = if from.is_some() {
+                                remaining
+                            } else {
+                                1. - remaining
+                            };
+                            let region = Bounds::new(
+                                bounds.origin + point(px(r.x * fraction), px(r.y * fraction)),
+                                size(
+                                    px(width + (r.w - width) * fraction),
+                                    px(height + (r.h - height) * fraction),
+                                ),
+                            );
+                            w.paint_quad(outline(
+                                region,
+                                Hsla::from(accent).opacity(1. - t),
+                                BorderStyle::default(),
+                            ));
+                            w.request_animation_frame();
+                        },
+                    )
+                    .absolute()
+                    .size_full(),
+                );
+            }
+        }
         chart
     }
 }
@@ -1307,6 +1410,8 @@ impl Render for Dashboard {
         let b = |id, label, active| self.button(id, label, active, cx);
         let width = f32::from(w.viewport_size().width);
         let rail = chrome::rail_width(width);
+        let content_width = width - rail - 2. * WORKSPACE_PAD;
+        let split_width = content_width - 3.; // Outer frame and the 1 px divider.
         let compact = width < 960.;
         let analysis = !self.menu && self.pane != 2;
         let loaded = analysis && self.tree.is_some();
@@ -1317,9 +1422,28 @@ impl Render for Dashboard {
             .bg(rgb(if self.dark { 0x141d2b } else { 0xf2f5fa }))
             .text_color(rgb(if self.dark { 0xe6edf8 } else { 0x1d2d46 }))
             .text_sm()
-            .font_family("Segoe UI");
+            .font(Font {
+                features: FontFeatures(Arc::new(vec![("tnum".into(), 1)])),
+                ..font("Segoe UI")
+            });
         // A focus-tracked ancestor would consume caption mouse-down before Win32 handles it.
+        let end_drag =
+            move |s: &mut Self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>| {
+                s.drag_origin = None;
+                if let Some((start_x, start_split)) = s.split_drag.take() {
+                    s.split = (start_split
+                        + f32::from(event.position.x - start_x) / split_width.max(1.))
+                    .clamp(0.2, 0.8);
+                    if s.args.shot.is_none()
+                        && let Ok(p) = platform::settings()
+                    {
+                        let _ = p.set_value("splitPercent", &((s.split * 100.).round() as u32));
+                    }
+                    cx.notify();
+                }
+            };
         let workspace = div()
+            .relative()
             .flex()
             .flex_1()
             .min_h_0()
@@ -1334,34 +1458,9 @@ impl Render for Dashboard {
                         s.start_drag(id, w, cx);
                     }
                 }
-                if s.resizing {
-                    if e.pressed_button != Some(MouseButton::Left) {
-                        s.resizing = false;
-                        cx.notify();
-                        return;
-                    }
-                    let width = f32::from(w.viewport_size().width);
-                    let left = chrome::rail_width(width) + 12.;
-                    s.split = ((f32::from(e.position.x) - left) / (width - left - 12.).max(1.))
-                        .clamp(0.2, 0.8);
-                    cx.notify()
-                }
             }))
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(|s, _, _, cx| {
-                    s.drag_origin = None;
-                    if s.resizing {
-                        s.resizing = false;
-                        cx.notify();
-                        if s.args.shot.is_none()
-                            && let Ok(p) = platform::settings()
-                        {
-                            let _ = p.set_value("splitPercent", &((s.split * 100.) as u32));
-                        }
-                    }
-                }),
-            )
+            .on_mouse_up(MouseButton::Left, cx.listener(end_drag))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(end_drag))
             .on_action(cx.listener(|s, _: &Refresh, w, cx| s.action("refresh", w, cx)))
             .on_action(cx.listener(|s, _: &GoUp, w, cx| s.action("up", w, cx)))
             .on_action(cx.listener(|s, _: &Back, w, cx| s.action("back", w, cx)))
@@ -1497,16 +1596,15 @@ impl Render for Dashboard {
             .flex_1()
             .min_w_0()
             .h_full()
-            .p_3()
+            .p(px(WORKSPACE_PAD))
             .flex()
             .flex_col()
-            .gap_2()
-            .child(self.heading(cx));
+            .gap_1()
+            .child(self.heading(content_width, cx));
         if analysis && (self.scan_items.is_some() || (!loaded && self.cancel.is_some())) {
             page = page.child(self.location_row(cx));
         }
         if loaded {
-            page = page.child(self.summary(compact));
             let filter_count = [&self.options.include, &self.options.exclude]
                 .iter()
                 .filter(|s| !s.trim().is_empty())
@@ -1540,7 +1638,11 @@ impl Render for Dashboard {
                 .when(filter_count > 0, |d| {
                     d.child(b("clear-filters", t("Clear filters", "清除筛选"), false))
                 });
-            page = page.child(controls.child(div().flex_1()).child(self.size_selector(cx)));
+            page = page.child(
+                controls
+                    .child(div().w(px(1.)).h(px(16.)).bg(self.divider()))
+                    .child(self.size_selector(cx)),
+            );
         }
         if loaded && self.export_panel {
             let mut pane = self.panel().p_2().flex().gap_1().flex_wrap();
@@ -1819,7 +1921,7 @@ impl Render for Dashboard {
                 .into_any_element()
         } else {
             // Leave room for the expander, Shell icon and name before the fixed detail columns.
-            let available = width - rail - 26.;
+            let available = split_width;
             let tree_width = if compact {
                 available
             } else {
@@ -1833,16 +1935,17 @@ impl Render for Dashboard {
             let name_min =
                 (tree_width - 20. - details).clamp((tree_width - 108.).clamp(70., 116.), 180.);
             let tree_min_width = px(name_min + 16. + details);
-            let left = self
-                .panel()
-                .when(!compact, |d| d.w(relative(self.split)))
+            let name_width = tree_min_width.max(px(tree_width)) - px(16. + details);
+            let left = div()
+                .when(!compact, |d| d.flex_none().w(px(tree_width)))
                 .when(compact, |d| d.flex_1())
                 .h_full()
                 .flex()
                 .flex_col()
                 .child(
                     self.line()
-                        .p_2()
+                        .px_2()
+                        .py(px(2.))
                         .child(
                             div()
                                 .flex_1()
@@ -1883,7 +1986,7 @@ impl Render for Dashboard {
                                             self.table_header(false, None, short, cx)
                                                 .min_w(tree_min_width),
                                         )
-                                        .child(self.listing(false, None, short, cx)),
+                                        .child(self.listing(false, Some(name_width), short, cx)),
                                 ),
                         )
                         .child(
@@ -1893,11 +1996,17 @@ impl Render for Dashboard {
                             ),
                         ),
                 );
-            let map_width = f32::from(self.chart_size.width);
+            let map_width = if compact {
+                available
+            } else {
+                available - tree_width
+            };
             let stacked = map_width < 420.;
+            let narrow_header = map_width < 265.;
             let controls = div()
                 .flex_none()
                 .flex()
+                .when(narrow_header, |d| d.w_full())
                 .items_center()
                 .gap_1()
                 .child(
@@ -1926,8 +2035,8 @@ impl Render for Dashboard {
                     t("Parent folder (Alt+Up)", "上一级 (Alt+↑)"),
                     self.root != 0,
                     cx,
-                ))
-                .child(self.button("colors",
+                ));
+            let colors = self.button("colors",
                     if self.by_type {t("Color: type", "按类型着色")} else {t("Color: branch", "按分支着色")},
                     false, cx)
                     .tooltip({
@@ -1939,33 +2048,38 @@ impl Render for Dashboard {
                               "当前视图的每个一级分支使用一种颜色。点击切换为按文件类型着色。")
                         };
                         move |w,cx| gpui_component::tooltip::Tooltip::new(hint).build(w,cx)
-                    }));
+                    });
             let trail = self.breadcrumb_trail(
-                (map_width - if stacked { 16. } else { 252. }).max(24.),
+                (map_width
+                    - if narrow_header {
+                        116.
+                    } else if stacked {
+                        16.
+                    } else {
+                        252.
+                    })
+                .max(24.),
                 w,
                 cx,
             );
-            let mut right = self
-                .panel()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .min_w_0()
-                .h_full()
-                .child(
-                    div()
-                        .flex()
-                        .p_2()
-                        .gap_1()
-                        .when(stacked, |d| d.flex_col())
-                        .when(!stacked, |d| d.items_center())
-                        .child(controls)
-                        .child(
-                            trail
-                                .when(stacked, |d| d.flex_none().w_full().h(px(30.)))
-                                .when(!stacked, |d| d.flex_1()),
-                        ),
-                );
+            let mut right = div().flex().flex_col().flex_1().min_w_0().h_full().child(
+                div()
+                    .flex()
+                    .px_2()
+                    .py(px(2.))
+                    .gap_1()
+                    .items_center()
+                    .when(stacked, |d| d.flex_wrap())
+                    .child(controls)
+                    .child(colors)
+                    .child(
+                        trail
+                            .when(stacked && !narrow_header, |d| {
+                                d.flex_none().w_full().h(px(30.))
+                            })
+                            .when(!stacked || narrow_header, |d| d.flex_1()),
+                    ),
+            );
             if self.view.filtered()
                 && let Some(tree) = &self.tree
             {
@@ -2018,31 +2132,60 @@ impl Render for Dashboard {
                     menu
                 },
             ));
-            div()
+            let panes = self
+                .panel()
+                .relative()
                 .flex_1()
                 .min_h_0()
                 .flex()
-                .gap_2()
                 .when(!compact || !self.compact_map, |d| d.child(left))
+                .when(!compact, |d| {
+                    d.child(div().flex_none().w(px(1.)).h_full().bg(self.divider()))
+                })
+                .when(!compact || self.compact_map, |d| d.child(right))
                 .when(!compact, |d| {
                     d.child(
                         div()
                             .id("analysis-splitter")
+                            .absolute()
+                            .left(px(tree_width - 4.))
                             .h_full()
-                            .w(px(5.))
+                            .w(px(9.))
+                            .flex()
+                            .justify_center()
+                            .group("splitter")
                             .cursor_col_resize()
-                            .hover(|d| d.bg(rgb(0x7395dd)))
+                            .child(
+                                div()
+                                    .w(px(2.))
+                                    .h_full()
+                                    .when(self.split_drag.is_some(), |d| {
+                                        d.bg(self.selection_accent())
+                                    })
+                                    .group_hover("splitter", |d| d.bg(rgb(0x7395dd))),
+                            )
                             .on_mouse_down(
                                 MouseButton::Left,
-                                cx.listener(|s, _, _, cx| {
-                                    s.resizing = true;
+                                cx.listener(|s, e: &MouseDownEvent, _, cx| {
+                                    cx.stop_propagation();
+                                    s.drag_origin = None;
+                                    s.split_drag = Some((e.position.x, s.split));
                                     cx.notify();
                                 }),
                             ),
                     )
-                })
-                .when(!compact || self.compact_map, |d| d.child(right))
-                .into_any_element()
+                });
+            if compact && self.motion_enabled {
+                panes
+                    .with_animation(
+                        ("compact-view", self.compact_map as usize),
+                        Animation::new(Duration::from_millis(110)),
+                        |d, t| d.opacity(0.80 + 0.20 * t),
+                    )
+                    .into_any_element()
+            } else {
+                panes.into_any_element()
+            }
         };
         page = page.child(body);
         let status = if self.status.is_empty() {
@@ -2065,7 +2208,7 @@ impl Render for Dashboard {
             .gap_2()
             .min_w_0()
             .flex_none()
-            .when(loaded, |d| d.h(px(38.)));
+            .when(loaded, |d| d.h(px(32.)));
         if loaded
             && let Some(tree) = &self.tree
             && ((self.pane == 0 && self.explicit_selection && self.view.included[self.selected])
@@ -2105,72 +2248,67 @@ impl Render for Dashboard {
             }
             footer = footer.child(
                 div()
-                    .flex_1()
-                    .min_w_0()
                     .flex()
-                    .flex_col()
+                    .items_center()
+                    .gap_2()
+                    .min_w_0()
+                    .max_w(px(content_width * 0.34))
+                    .id("selection-path")
+                    .track_focus(&self.path_focus)
+                    .focus(|d| d.bg(rgb(if self.dark { 0x334972 } else { 0xe2ebff })))
+                    .on_click(cx.listener(|s, _, w, _| s.path_focus.focus(w)))
+                    .on_key_down(cx.listener(|s, key: &KeyDownEvent, w, cx| {
+                        if key.keystroke.key == "escape" {
+                            s.focus.focus(w);
+                            cx.stop_propagation();
+                        }
+                    }))
                     .child(
                         div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
                             .min_w_0()
-                            .id("selection-path")
-                            .track_focus(&self.path_focus)
-                            .focus(|d| d.bg(rgb(if self.dark { 0x334972 } else { 0xe2ebff })))
-                            .on_click(cx.listener(|s, _, w, _| s.path_focus.focus(w)))
-                            .on_key_down(cx.listener(|s, key: &KeyDownEvent, w, cx| {
-                                if key.keystroke.key == "escape" {
-                                    s.focus.focus(w);
-                                    cx.stop_propagation();
-                                }
-                            }))
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .truncate()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(label),
-                            )
-                            .when(scope.is_none(), |d| {
-                                d.child(div().flex_none().child(format_size(weight, self.unit)))
-                            })
-                            .tooltip(move |w, cx| {
-                                gpui_component::tooltip::Tooltip::new(full.clone()).build(w, cx)
-                            }),
+                            .truncate()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(label),
                     )
-                    .child(
-                        div()
-                            .flex()
-                            .gap_2()
-                            .items_center()
-                            .min_w_0()
-                            .when(!multiple && !parent.is_empty(), |d| {
-                                d.child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(self.muted())
-                                        .min_w_0()
-                                        .truncate()
-                                        .child(parent),
-                                )
-                            })
-                            .child(status_text),
-                    ),
+                    .when(scope.is_none(), |d| {
+                        d.child(div().flex_none().child(format_size(weight, self.unit)))
+                    })
+                    .tooltip(move |w, cx| {
+                        gpui_component::tooltip::Tooltip::new(full.clone()).build(w, cx)
+                    }),
             );
+            footer = footer.child(div().flex_none().w(px(1.)).h(px(16.)).bg(self.divider()));
             if live {
                 footer = footer
                     .child(b("reveal", t("Explore", "定位"), false))
                     .child(b("open", t("Open", "打开"), false));
             }
             footer = footer.child(self.selection_more(cx));
+            if !multiple && !parent.is_empty() && content_width > 960. {
+                footer = footer.child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_xs()
+                        .text_color(self.muted())
+                        .child(parent),
+                );
+            }
+            footer = footer.child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .justify_end()
+                    .child(status_text),
+            );
             if live {
                 footer = footer.child(
                     div()
                         .ml_1()
                         .pl_3()
                         .border_l_1()
-                        .border_color(self.muted())
+                        .border_color(self.divider())
                         .child(b(
                             "recycle",
                             self.recycle_caption(scope.is_some(), roots.len()),
@@ -2186,7 +2324,28 @@ impl Render for Dashboard {
             .child(
                 workspace
                     .child(self.sidebar(rail, cx))
-                    .child(page.child(footer)),
+                    .child(page.child(footer))
+                    .when_some(self.split_drag, |d, (start_x, start_split)| {
+                        d.child(
+                            div()
+                                .absolute()
+                                .inset_0()
+                                .block_mouse_except_scroll()
+                                .cursor_col_resize()
+                                .on_mouse_move(cx.listener(move |s, e: &MouseMoveEvent, _, cx| {
+                                    if e.pressed_button == Some(MouseButton::Left) {
+                                        s.split = (start_split
+                                            + f32::from(e.position.x - start_x)
+                                                / split_width.max(1.))
+                                        .clamp(0.2, 0.8);
+                                    } else {
+                                        s.split_drag = None;
+                                    }
+                                    cx.notify();
+                                }))
+                                .on_mouse_up(MouseButton::Left, cx.listener(end_drag)),
+                        )
+                    }),
             )
     }
 }
