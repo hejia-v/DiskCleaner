@@ -27,25 +27,27 @@ endif()
 set(cargo_target "${CMAKE_SOURCE_DIR}/build/cargo")
 set(cargo_profile "$<IF:$<CONFIG:Debug>,dev,release>")
 set(cargo_output "$<IF:$<CONFIG:Debug>,debug,release>")
+set(package_dir "$<TARGET_PROPERTY:DiskCleaner,RUNTIME_OUTPUT_DIRECTORY>")
 add_custom_target(DiskCleaner ALL
     COMMAND "${CARGO_EXECUTABLE}" build --locked --profile "${cargo_profile}" --target-dir "${cargo_target}"
     COMMAND "${CMAKE_COMMAND}"
         "-DAPP=${cargo_target}/${cargo_output}/DiskCleaner.exe"
         "-DRUNTIME=${msvc_runtime}"
-        "-DPACKAGE_DIR=$<TARGET_GENEX_EVAL:DiskCleaner,$<TARGET_PROPERTY:DiskCleaner,RUNTIME_OUTPUT_DIRECTORY>>"
+        "-DPACKAGE_DIR=${package_dir}"
         -P "${CMAKE_SOURCE_DIR}/tools/deploy.cmake"
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     USES_TERMINAL VERBATIM)
-set_target_properties(DiskCleaner PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/dist/$<CONFIG>")
+set_target_properties(DiskCleaner PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/dist")
 
 option(DISK_CLEANER_BUILD_TESTS "Enable Rust regression tests" ON)
 if(DISK_CLEANER_BUILD_TESTS)
     enable_testing()
     add_test(NAME rust-regressions COMMAND "${CARGO_EXECUTABLE}" test --locked --profile "${cargo_profile}"
         --manifest-path "${CMAKE_SOURCE_DIR}/Cargo.toml" --target-dir "${cargo_target}")
-    add_test(NAME ntfs-selftest COMMAND "${CMAKE_SOURCE_DIR}/dist/$<CONFIG>/DiskCleaner.exe" --selftest)
+    add_test(NAME ntfs-selftest COMMAND "${package_dir}/DiskCleaner.exe" --selftest)
     add_test(NAME distribution-contents COMMAND "${CMAKE_COMMAND}"
-        "-DPACKAGE_DIR=${CMAKE_SOURCE_DIR}/dist/$<CONFIG>" -P "${CMAKE_SOURCE_DIR}/tools/check_package.cmake")
+        "-DPACKAGE_DIR=${package_dir}" "-DEXPECTED_APP=${cargo_target}/${cargo_output}/DiskCleaner.exe"
+        -P "${CMAKE_SOURCE_DIR}/tools/check_package.cmake")
 endif()
 
 

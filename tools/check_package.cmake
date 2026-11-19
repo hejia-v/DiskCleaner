@@ -1,6 +1,11 @@
-# The entire configuration directory is shipped to users.
-file(GLOB_RECURSE contents RELATIVE "${PACKAGE_DIR}" "${PACKAGE_DIR}/*")
+# Include even empty subdirectories in the package check.
+file(GLOB contents LIST_DIRECTORIES true RELATIVE "${PACKAGE_DIR}" "${PACKAGE_DIR}/*")
 list(SORT contents)
 if(NOT contents STREQUAL "DiskCleaner.exe;vcruntime140.dll")
     message(FATAL_ERROR "Unexpected distribution contents in ${PACKAGE_DIR}: ${contents}")
+endif()
+file(SHA256 "${EXPECTED_APP}" expected_hash)
+file(SHA256 "${PACKAGE_DIR}/DiskCleaner.exe" package_hash)
+if(NOT package_hash STREQUAL expected_hash)
+    message(FATAL_ERROR "Rebuild the selected configuration before testing the shared package")
 endif()

@@ -3,7 +3,7 @@
 
 $ErrorActionPreference = 'Continue'
 $root = Split-Path -Parent $PSScriptRoot
-$exe = Join-Path $root 'dist\Release\DiskCleaner.exe'
+$exe = Join-Path $root 'dist\DiskCleaner.exe'
 $tmp = Join-Path $root ('work\smoke\' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 

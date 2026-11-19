@@ -59,7 +59,7 @@ def main() -> int:
     output.mkdir(parents=True, exist_ok=True)
     for name, theme, geometry, tab, fixture, lang in shots:
         target = output / f"{name}.png"
-        command = [str(root / "dist/Release/DiskCleaner.exe"), "--geometry", geometry,
+        command = [str(root / "dist/DiskCleaner.exe"), "--geometry", geometry,
                    "--theme", theme, "--lang", lang, "--tab", str(tab),
                    "--shot", str(target), "--delay", "600"]
         if fixture:

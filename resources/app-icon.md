@@ -14,4 +14,4 @@ python -c "from PIL import Image; Image.open('resources/app.png').save('resource
 ```
 
 转换后重新构建。如果 Windows 对以前固定到任务栏的快捷方式仍显示缓存图标，
-取消固定旧快捷方式，再从 `dist/Release/DiskCleaner.exe` 固定即可。
+取消固定旧快捷方式，再从 `dist/DiskCleaner.exe` 固定即可。

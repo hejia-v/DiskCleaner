@@ -14,7 +14,7 @@ DiskCleaner 是用 Rust 和 GPUI 实现的 Windows 磁盘空间分析器。目�
 ```powershell
 cmake -S . -B build -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release -DDISK_CLEANER_BUILD_TESTS=ON
 cmake --build build --config Release
-.\dist\Release\DiskCleaner.exe
+.\dist\DiskCleaner.exe
 ```
 
 NMake 使用单配置构建。需要 Debug 时，复用同一份 CMake 配置目录。调试结束后将 `CMAKE_BUILD_TYPE` 切回 `Release`，再构建、测试并交付正式版。
@@ -24,9 +24,9 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build --config Debug
 ```
 
-正式程序位于 `dist/Release/DiskCleaner.exe`，Debug 使用 `dist/Debug/`。CMake 同步部署 `vcruntime140.dll`。这两个文件构成 x64 Windows 上的应用分发内容。Cargo 中间文件位于 `build/cargo/`。图标源文件为 `resources/app.png` 和多尺寸 `resources/app.ico`，通过 `resources/app.rc` 嵌入 EXE，并用于 Windows 大小窗口图标。
+所有配置共用唯一打包目录 `dist/`，只分发 `DiskCleaner.exe` 和 `vcruntime140.dll`。最后一次构建的配置决定其中的程序版本。Cargo 中间文件位于 `build/cargo/`。图标源文件为 `resources/app.png` 和多尺寸 `resources/app.ico`，通过 `resources/app.rc` 嵌入 EXE，并用于 Windows 大小窗口图标。
 
-重复打包复用同一个分发目录。EXE 和运行库内容相同时，正在运行的程序会继续运行。需要更新时，打包流程会终止从该配置的发布路径启动的实例，再原位替换有变化的文件。
+重复打包会跳过内容相同的文件，正在运行的程序会继续运行。需要更新时，打包流程会终止从 `dist/DiskCleaner.exe` 启动的实例，再原位替换有变化的文件。
 
 ## 验证
 
@@ -35,7 +35,7 @@ cmake --build build --config Debug
 ```powershell
 ctest --test-dir build -C Release --output-on-failure
 pwsh -NoProfile -File tools\smoke.ps1
-.\dist\Release\DiskCleaner.exe --help
+.\dist\DiskCleaner.exe --help
 ```
 
 Rust 回归用例覆盖目录统计、CSV/TSV 往返、MFT 记录与碎片化卷、取消、导出失败、重命名、重复文件及空间图面积。冒烟脚本从正式入口运行，使用 `work/sample` 和 `work/dups`，将截图和导出文件写入 `work/smoke/` 下的独立目录。

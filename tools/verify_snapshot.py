@@ -88,7 +88,7 @@ def main():
         print("Create one temporary file, scan its directory, remove that file and send F5 to the test window.")
         return 0
     root = Path(__file__).resolve().parents[1]
-    exe = root / "dist/Release/DiskCleaner.exe"
+    exe = root / "dist/DiskCleaner.exe"
     with tempfile.TemporaryDirectory(prefix="diskcleaner-snapshot-") as tmp:
         folder = Path(tmp)
         victim = folder / "fixture.txt"
