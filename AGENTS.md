@@ -26,6 +26,7 @@
 - 复用同一工具链、配置和目标目录。项目默认关闭 Cargo 增量编译，保留当前配置的依赖缓存；避免为每次任务、生成器或分支创建独立构建目录。
 - 切换工具链、依赖集或发现磁盘占用异常时，先按配置统计 `build/cargo/`。只清理已确认废弃的配置。以 Debug 为例，先运行 `cargo clean --profile dev --target-dir build/cargo --dry-run` 查看范围，确认后再执行同一命令去掉 `--dry-run`。
 - 清理前核对仓库绝对路径并等待编译结束。常规清理只针对本项目中间产物，保留分发程序、测试样本和用户级 Cargo 缓存。
+- 冒烟测试成功后，`tools/smoke.ps1` 在 `work/smoke/` 保留最近 5 次已完成的结果。失败时保留现场，等下次成功再轮换。可运行 `python tools/prune_smoke.py --dry-run` 预览清单。
 
 ## 应用图标
 

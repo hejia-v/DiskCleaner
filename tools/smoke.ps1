@@ -4,8 +4,10 @@
 $ErrorActionPreference = 'Continue'
 $root = Split-Path -Parent $PSScriptRoot
 $exe = Join-Path $root 'dist\DiskCleaner.exe'
-$tmp = Join-Path $root ('work\smoke\' + [guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+$runId = [guid]::NewGuid().ToString('N')
+$results = Join-Path $root 'work\smoke'
+$tmp = Join-Path $results ('.running-' + $runId)
+New-Item -ItemType Directory -Force -Path $tmp -ErrorAction Stop | Out-Null
 
 $script:fail = 0
 $script:pass = 0
@@ -98,5 +100,9 @@ Check 'update check' (($LASTEXITCODE -eq 0) -and ($out -match 'newer= true') -an
 
 Write-Host ""
 Write-Host ("SMOKE RESULT: " + $script:pass + " passed, " + $script:fail + " failed")
-Write-Host "Artifacts: $tmp"
-exit $(if ($script:fail -eq 0) { 0 } else { 1 })
+(Get-Item -LiteralPath $tmp).LastWriteTimeUtc = [DateTime]::UtcNow
+Rename-Item -LiteralPath $tmp -NewName $runId -ErrorAction Stop
+Write-Host "Artifacts: $(Join-Path $results $runId)"
+if ($script:fail -ne 0) { exit 1 }
+python (Join-Path $PSScriptRoot 'prune_smoke.py') --apply
+exit $LASTEXITCODE

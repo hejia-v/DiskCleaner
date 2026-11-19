@@ -38,7 +38,7 @@ pwsh -NoProfile -File tools\smoke.ps1
 .\dist\DiskCleaner.exe --help
 ```
 
-Rust 回归用例覆盖目录统计、CSV/TSV 往返、MFT 记录与碎片化卷、取消、导出失败、重命名、重复文件及空间图面积。冒烟脚本从正式入口运行，使用 `work/sample` 和 `work/dups`，将截图和导出文件写入 `work/smoke/` 下的独立目录。
+Rust 回归用例覆盖目录统计、CSV/TSV 往返、MFT 记录与碎片化卷、取消、导出失败、重命名、重复文件及空间图面积。冒烟脚本从正式入口运行，使用 `work/sample` 和 `work/dups`，将截图和导出文件写入 `work/smoke/` 下的独立目录。每次成功后保留最近 5 次完成的测试结果，失败时保留现场。
 
 ## 主界面与统计口径
 
