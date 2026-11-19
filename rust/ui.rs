@@ -202,6 +202,7 @@ struct Dashboard {
     split: f32,
     split_drag: Option<(Pixels, f32)>,
     motion_enabled: bool,
+    metric_slide: Option<(std::time::Instant, f32)>,
     // Previous scope and the target's old bounds, when zooming into a visible cell.
     map_transition: Option<(std::time::Instant, usize, Option<Rect>)>,
     drag_origin: Option<(usize, Point<Pixels>)>,
@@ -401,6 +402,7 @@ impl Dashboard {
             split: (pref_num("splitPercent", 48).clamp(20, 80) as f32) / 100.,
             split_drag: None,
             motion_enabled: platform::client_animations_enabled(),
+            metric_slide: None,
             map_transition: None,
             drag_origin: None,
             dragging: false,
@@ -1858,8 +1860,12 @@ impl Dashboard {
                     if self.options.allocated == allocated {
                         return Ok(());
                     }
+                    let from = self.metric_position().0;
                     self.options.allocated = allocated;
-                    self.rebuild()
+                    self.rebuild();
+                    self.metric_slide = self
+                        .motion_enabled
+                        .then(|| (std::time::Instant::now(), from));
                 }
                 "fullpath" => {
                     self.options.full_path = !self.options.full_path;

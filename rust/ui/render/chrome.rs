@@ -1,6 +1,9 @@
 use super::*;
 use gpui_component::{
-    Disableable, button::Button, menu::DropdownMenu, switch::Switch, tooltip::Tooltip,
+    button::{Button, ButtonCustomVariant, ButtonVariants},
+    menu::DropdownMenu,
+    switch::Switch,
+    tooltip::Tooltip,
 };
 
 pub(super) fn rail_width(width: f32) -> f32 {
@@ -16,6 +19,89 @@ pub(super) fn glyph(symbol: &'static str, size: f32) -> Div {
 }
 
 impl Dashboard {
+    fn control_color(&self, light: u32, dark: u32) -> Rgba {
+        rgb(if self.dark { dark } else { light })
+    }
+
+    fn control_ink(&self) -> Rgba {
+        self.control_color(0x354761, 0xd6e2f3)
+    }
+
+    fn control_hover(&self) -> Rgba {
+        self.control_color(0xe5ecf7, 0x32435d)
+    }
+
+    fn control_pressed(&self) -> Rgba {
+        self.control_color(0xd3e0f3, 0x405674)
+    }
+
+    fn command_surface(&self, id: &'static str) -> Stateful<Div> {
+        div()
+            .id(id)
+            .flex_none()
+            .h(px(30.))
+            .rounded(px(6.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .gap(px(6.))
+            .border_1()
+            .border_color(transparent_black())
+            .text_size(px(13.))
+            .text_color(self.control_ink())
+            // Mouse commands keep keyboard focus in the working pane. Tab still shows a focus ring.
+            .on_mouse_down(MouseButton::Left, |_, w, _| w.prevent_default())
+    }
+
+    pub(super) fn command(
+        &self,
+        id: &'static str,
+        selected: bool,
+        cx: &Context<Self>,
+    ) -> Stateful<Div> {
+        self.command_surface(id)
+            .px(px(8.))
+            .cursor_pointer()
+            .focusable()
+            .tab_stop(true)
+            .when(selected, |d| {
+                d.bg(self.control_color(0xe0eaff, 0x2a4167))
+                    .text_color(self.selection_accent())
+                    .font_weight(FontWeight::SEMIBOLD)
+            })
+            .hover(|d| d.bg(self.control_hover()))
+            .active(|d| d.bg(self.control_pressed()))
+            .focus(|d| d.border_color(self.selection_accent()))
+            .on_click(cx.listener(move |s, _, w, cx| s.action(id, w, cx)))
+    }
+
+    fn menu_command(&self, id: &'static str, outlined: bool, cx: &App) -> Button {
+        let mut style = ButtonCustomVariant::new(cx)
+            .foreground(self.control_ink().into())
+            .hover(self.control_hover().into())
+            .active(self.control_pressed().into());
+        if outlined {
+            style = style
+                .color(self.control_color(0xffffff, 0x243248).into())
+                .border(self.divider().into());
+        }
+        Button::new(id)
+            .compact()
+            .rounded(px(6.))
+            .h(px(30.))
+            .custom(style)
+    }
+
+    fn menu_label(&self, label: impl Into<SharedString>) -> Div {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .text_size(px(13.))
+            .text_color(self.control_ink())
+            .child(label.into())
+            .child(glyph("\u{E70D}", 9.))
+    }
     pub(super) fn selection_more(&self, cx: &Context<Self>) -> AnyElement {
         let view = cx.weak_entity();
         let focus = self.focus.clone();
@@ -43,15 +129,20 @@ impl Dashboard {
         hint: &'static str,
         enabled: bool,
         cx: &Context<Self>,
-    ) -> Button {
-        Button::new(id)
-            .label(symbol)
-            .compact()
+    ) -> Stateful<Div> {
+        let button = if enabled {
+            self.command(id, false, cx)
+        } else {
+            self.command_surface(id)
+                .text_color(self.control_color(0x9aa9be, 0x697b97))
+        };
+        button
             .w(px(26.))
-            .h(px(30.))
-            .tooltip(hint)
-            .disabled(!enabled)
-            .on_click(cx.listener(move |s, _, w, cx| s.action(id, w, cx)))
+            .h(px(24.))
+            .px_0()
+            .rounded(px(4.))
+            .child(glyph(symbol, 12.))
+            .tooltip(move |w, cx| Tooltip::new(hint).build(w, cx))
     }
 
     pub(super) fn file_display_options(&self, cx: &Context<Self>) -> Div {
@@ -252,42 +343,87 @@ impl Dashboard {
         trail
     }
 
-    pub(super) fn size_selector(&self, cx: &Context<Self>) -> Div {
-        let track = rgb(if self.dark { 0x222e43 } else { 0xe3e9f2 });
-        let selected = rgb(if self.dark { 0x345183 } else { 0xffffff });
+    pub(crate) fn metric_position(&self) -> (f32, bool) {
+        let target = self.options.allocated as u8 as f32;
+        let Some((start, from)) = self.metric_slide else {
+            return (target, false);
+        };
+        let t = (start.elapsed().as_secs_f32() / 0.14).min(1.);
+        (target + (from - target) * (1. - t).powi(3), t < 1.)
+    }
+
+    pub(super) fn size_selector(&self, w: &Window, cx: &Context<Self>) -> Div {
+        let (file_width, disk_width) = if self.zh { (84., 84.) } else { (88., 112.) };
+        let (position, moving) = self.metric_position();
+        if moving {
+            w.request_animation_frame();
+        }
         div()
             .flex_none()
+            .relative()
             .flex()
             .items_center()
             .p(px(2.))
-            .rounded_md()
-            .bg(track)
+            .h(px(30.))
+            .rounded(px(7.))
+            .bg(self.control_color(0xe2e8f1, 0x202e42))
+            .child(
+                div()
+                    .absolute()
+                    .top(px(2.))
+                    .left(px(2. + position * file_width))
+                    .w(px(file_width + position * (disk_width - file_width)))
+                    .h(px(26.))
+                    .rounded(px(5.))
+                    .shadow_sm()
+                    .border_1()
+                    .border_color(self.control_color(0xc4d2e5, 0x516a8c))
+                    .bg(self.control_color(0xffffff, 0x354c69)),
+            )
             .children(
                 [
                     (
                         "logical-size",
                         self.text("File size", "文件大小"),
                         !self.options.allocated,
+                        file_width,
                     ),
                     (
                         "allocated-size",
                         self.text("Space on disk", "磁盘占用"),
                         self.options.allocated,
+                        disk_width,
                     ),
                 ]
                 .into_iter()
-                .map(|(id, label, on)| {
-                    self.button(id, label, on, cx)
+                .map(|(id, label, on, width)| {
+                    self.command_surface(id)
+                        .focusable()
+                        .tab_stop(true)
+                        .cursor_pointer()
+                        .w(px(width))
                         .h(px(26.))
-                        .px_3()
-                        .rounded(px(4.))
-                        .bg(if on { selected } else { track })
-                        .border_color(if on {
-                            rgb(if self.dark { 0x607eac } else { 0xc4cfdf })
+                        .rounded(px(5.))
+                        .gap(px(5.))
+                        .text_color(if on {
+                            self.selection_accent()
                         } else {
-                            track
+                            self.muted()
                         })
                         .when(on, |d| d.font_weight(FontWeight::SEMIBOLD))
+                        .hover(|d| d.bg(rgba(0x668ac314)))
+                        .active(|d| d.bg(rgba(0x668ac330)))
+                        .focus(|d| d.border_color(self.selection_accent()))
+                        .child(glyph(
+                            if id == "logical-size" {
+                                "\u{E8A5}"
+                            } else {
+                                "\u{EDA2}"
+                            },
+                            12.,
+                        ))
+                        .child(label)
+                        .on_click(cx.listener(move |s, _, w, cx| s.action(id, w, cx)))
                 }),
             )
     }
@@ -567,15 +703,17 @@ impl Dashboard {
             .flex()
             .flex_none()
             .min_w_0()
+            .h(px(32.))
             .items_center()
             .gap_1()
             .child(if self.cancel.is_none() {
-                self.button("change-location", "", false, cx)
+                self.command("change-location", false, cx)
                     .flex_shrink()
                     .min_w_0()
                     .max_w(px((width * 0.25).min(330.)))
-                    .gap_1()
-                    .child(glyph("\u{E8B7}", 15.))
+                    .bg(self.control_color(0xffffff, 0x243248))
+                    .border_color(self.divider())
+                    .child(glyph("\u{F12B}", 14.).text_color(self.selection_accent()))
                     .child(location_label)
                     .child(glyph("\u{E70D}", 10.))
                     .tooltip(move |w, cx| Tooltip::new(hint.clone()).build(w, cx))
@@ -591,7 +729,7 @@ impl Dashboard {
                     .mx_1()
                     .bg(self.divider()),
             )
-            .child(self.summary(width))
+            .child(self.summary(width, cx))
             .child(div().flex_1())
             .map(|d| {
                 if self.cancel.is_some() {
@@ -612,12 +750,22 @@ impl Dashboard {
                     )
                 })
                 .child(
-                    self.button("refresh", t("Refresh", "刷新"), self.snapshot_dirty, cx)
+                    self.command("refresh", self.snapshot_dirty, cx)
+                        .child(glyph("\u{E72C}", 13.))
+                        .when(width >= 710., |d| d.child(t("Refresh", "刷新")))
                         .tooltip(move |w, cx| Tooltip::new(refresh_hint).build(w, cx)),
                 )
                 .child(
-                    Button::new("export-menu")
-                        .label(t("Export ▾", "导出 ▾"))
+                    self.menu_command("export-menu", true, cx)
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(6.))
+                                .text_color(self.control_ink())
+                                .child(glyph("\u{E898}", 13.))
+                                .child(self.menu_label(t("Export", "导出"))),
+                        )
                         .dropdown_menu_with_anchor(Corner::TopRight, move |mut menu, _, cx| {
                             menu = menu.action_context(focus.clone());
                             let Some(dashboard) = handle.upgrade() else {
@@ -698,7 +846,7 @@ impl Dashboard {
             })
     }
 
-    fn summary(&self, width: f32) -> Div {
+    fn summary(&self, width: f32, cx: &App) -> Div {
         let t = |en, zh| self.text(en, zh);
         let root = &self.tree.as_ref().expect("loaded scan").nodes[0];
         let metric = if self.options.allocated {
@@ -762,13 +910,12 @@ impl Dashboard {
                 format_size(total, self.unit)
             );
             row = row.child(
-                Button::new("volume-details")
-                    .compact()
-                    .label(if width < 710. {
-                        t("Volume ▾", "卷容量 ▾").to_owned()
+                self.menu_command("volume-details", false, cx)
+                    .child(self.menu_label(if width < 710. {
+                        t("Volume", "卷容量").to_owned()
                     } else {
                         free_label.clone()
-                    })
+                    }))
                     .dropdown_menu_with_anchor(Corner::TopRight, move |menu, _, _| {
                         menu.label(free_label.clone())
                             .label(used_label.clone())

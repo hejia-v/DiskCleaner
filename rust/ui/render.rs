@@ -459,19 +459,7 @@ impl Dashboard {
         } else {
             (0xffffff, 0x32435d, 0xd5dfec)
         };
-        let quiet = !active
-            && matches!(
-                id,
-                "types"
-                    | "filter"
-                    | "change-location"
-                    | "refresh"
-                    | "tree-columns"
-                    | "colors"
-                    | "reveal"
-                    | "open"
-                    | "recycle"
-            );
+        let quiet = !active && matches!(id, "tree-columns" | "reveal" | "open" | "recycle");
         div()
             .id(id)
             .focusable()
@@ -506,16 +494,6 @@ impl Dashboard {
                 } else {
                     0xeef3ff
                 }))
-            })
-            .when(matches!(id, "types" | "filter"), |d| {
-                d.gap_1().child(chrome::glyph(
-                    if id == "filter" {
-                        "\u{E71C}"
-                    } else {
-                        "\u{E8FD}"
-                    },
-                    13.,
-                ))
             })
             .child(label.into())
             .on_key_down(cx.listener(move |s, key: &KeyDownEvent, w, cx| {
@@ -1613,35 +1591,57 @@ impl Render for Dashboard {
             let controls = self
                 .line()
                 .when(compact && self.pane == 0, |d| {
-                    d.child(b(
-                        "show-tree",
-                        t("Directory tree", "目录树"),
-                        !self.compact_map,
-                    ))
-                    .child(b(
-                        "show-map",
-                        t("Treemap", "空间图"),
-                        self.compact_map,
-                    ))
+                    d.child(
+                        self.command("show-tree", !self.compact_map, cx)
+                            .child(t("Directory tree", "目录树")),
+                    )
+                    .child(
+                        self.command("show-map", self.compact_map, cx)
+                            .child(t("Treemap", "空间图")),
+                    )
                 })
-                .child(b("types", t("File types", "文件类型"), self.types))
-                .child(self.button(
-                    "filter",
-                    if filter_count == 0 {
-                        filter_label.to_owned()
-                    } else {
-                        format!("{filter_label} · {filter_count}")
-                    },
-                    self.filters || filter_count > 0,
-                    cx,
-                ))
+                .child(
+                    div()
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .h(px(30.))
+                        .p(px(2.))
+                        .gap(px(2.))
+                        .rounded(px(7.))
+                        .border_1()
+                        .border_color(self.divider())
+                        .bg(rgb(if self.dark { 0x243248 } else { 0xfafcfe }))
+                        .child(
+                            self.command("types", self.types, cx)
+                                .h(px(24.))
+                                .rounded(px(4.))
+                                .child(chrome::glyph("\u{E71D}", 13.))
+                                .child(t("File types", "文件类型")),
+                        )
+                        .child(div().h(px(12.)).w(px(1.)).bg(self.divider()))
+                        .child(
+                            self.command("filter", self.filters || filter_count > 0, cx)
+                                .h(px(24.))
+                                .rounded(px(4.))
+                                .child(chrome::glyph("\u{E71C}", 13.))
+                                .child(if filter_count == 0 {
+                                    filter_label.to_owned()
+                                } else {
+                                    format!("{filter_label} · {filter_count}")
+                                }),
+                        ),
+                )
                 .when(filter_count > 0, |d| {
-                    d.child(b("clear-filters", t("Clear filters", "清除筛选"), false))
+                    d.child(
+                        self.command("clear-filters", false, cx)
+                            .child(t("Clear filters", "清除筛选")),
+                    )
                 });
             page = page.child(
                 controls
                     .child(div().w(px(1.)).h(px(16.)).bg(self.divider()))
-                    .child(self.size_selector(cx)),
+                    .child(self.size_selector(w, cx)),
             );
         }
         if loaded && self.export_panel {
@@ -2015,30 +2015,38 @@ impl Render for Dashboard {
                         .font_weight(FontWeight::SEMIBOLD)
                         .child(t("Treemap", "空间图")),
                 )
-                .child(self.map_nav_button(
-                    "back",
-                    "‹",
-                    t("Back (Alt+Left)", "后退 (Alt+←)"),
-                    !self.history.is_empty(),
-                    cx,
-                ))
-                .child(self.map_nav_button(
-                    "forward",
-                    "›",
-                    t("Forward (Alt+Right)", "前进 (Alt+→)"),
-                    !self.future.is_empty(),
-                    cx,
-                ))
-                .child(self.map_nav_button(
-                    "up",
-                    "↑",
-                    t("Parent folder (Alt+Up)", "上一级 (Alt+↑)"),
-                    self.root != 0,
-                    cx,
-                ));
-            let colors = self.button("colors",
-                    if self.by_type {t("Color: type", "按类型着色")} else {t("Color: branch", "按分支着色")},
-                    false, cx)
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .p(px(2.))
+                        .h(px(28.))
+                        .rounded(px(6.))
+                        .bg(Hsla::from(self.divider()).opacity(0.30))
+                        .child(self.map_nav_button(
+                            "back",
+                            "\u{E72B}",
+                            t("Back (Alt+Left)", "后退 (Alt+←)"),
+                            !self.history.is_empty(),
+                            cx,
+                        ))
+                        .child(self.map_nav_button(
+                            "forward",
+                            "\u{E72A}",
+                            t("Forward (Alt+Right)", "前进 (Alt+→)"),
+                            !self.future.is_empty(),
+                            cx,
+                        ))
+                        .child(self.map_nav_button(
+                            "up",
+                            "\u{E74A}",
+                            t("Parent folder (Alt+Up)", "上一级 (Alt+↑)"),
+                            self.root != 0,
+                            cx,
+                        )),
+                );
+            let colors = self.command("colors", false, cx)
+                    .child(if self.by_type {t("Color: type", "按类型着色")} else {t("Color: branch", "按分支着色")})
                     .tooltip({
                         let hint = if self.by_type {
                             t("Known file types share a color; other files use their branch color. Click for branch colors.",
