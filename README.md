@@ -28,6 +28,8 @@ cmake --build build --config Debug
 
 重复打包会跳过内容相同的文件，正在运行的程序会继续运行。需要更新时，打包流程会终止从 `dist/DiskCleaner.exe` 启动的实例，再原位替换有变化的文件。
 
+每次 Release 打包成功后，CMake 会调用 Python 只读统计 `build/cargo/`。超过 3 GiB 时，日志会列出占用明细和可清理范围，保留缓存并正常完成打包。
+
 ## 验证
 
 直接运行 Cargo 时也在仓库根目录执行，统一使用 `build/cargo/`。日常验证使用 Release，保留同一套依赖缓存。构建目录约定与缓存清理流程见 [AGENTS.md](AGENTS.md)。

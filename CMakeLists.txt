@@ -34,6 +34,7 @@ add_custom_target(DiskCleaner ALL
         "-DAPP=${cargo_target}/${cargo_output}/DiskCleaner.exe"
         "-DRUNTIME=${msvc_runtime}"
         "-DPACKAGE_DIR=${package_dir}"
+        "-DCHECK_CARGO_CACHE=$<CONFIG:Release>"
         -P "${CMAKE_SOURCE_DIR}/tools/deploy.cmake"
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     USES_TERMINAL VERBATIM)

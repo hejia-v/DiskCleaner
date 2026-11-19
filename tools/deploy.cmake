@@ -16,11 +16,7 @@ foreach(source IN ITEMS "${RUNTIME}" "${APP}")
     endif()
     list(APPEND changed "${source}")
 endforeach()
-if(NOT changed)
-    return()
-endif()
-
-if(EXISTS "${PACKAGE_DIR}/DiskCleaner.exe")
+if(changed AND EXISTS "${PACKAGE_DIR}/DiskCleaner.exe")
     find_program(POWERSHELL NAMES pwsh powershell REQUIRED)
     execute_process(COMMAND "${POWERSHELL}" -NoProfile -NonInteractive
         -File "${CMAKE_CURRENT_LIST_DIR}/stop_package_instance.ps1"
@@ -39,3 +35,12 @@ foreach(source IN LISTS changed)
         message(FATAL_ERROR "Could not replace ${dest}: ${status}")
     endif()
 endforeach()
+
+# Report after every successful Release deployment, including an unchanged package.
+if(CHECK_CARGO_CACHE)
+    execute_process(COMMAND python "${CMAKE_CURRENT_LIST_DIR}/check_cargo_cache.py"
+        RESULT_VARIABLE report_status ENCODING UTF-8)
+    if(NOT report_status STREQUAL "0")
+        message(WARNING "Package deployed. Cargo cache check could not finish (${report_status}).")
+    endif()
+endif()

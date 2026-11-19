@@ -24,7 +24,7 @@
 ## 控制缓存占用
 
 - **复用 Release 缓存。** 日常编译、测试、Clippy 使用同一 MSVC 工具链、`--locked --release` 和 `build/cargo/`，保持增量编译关闭。仅在需要调试时构建 Debug。
-- **定期只读盘点。** 做空间巡检、更换工具链或调整依赖集后，在编译结束时运行 `python tools/check_cargo_cache.py`。2026-11-19 的 Release 基线约为 1.93 GiB。文件实际分配空间超过 3 GiB 时，脚本列出各项占用和定向清理范围。阈值只触发提示；禁止按文件年龄自动淘汰 Release 依赖。
+- **只读盘点。** 每次 Release 打包成功后自动检查 `build/cargo/`，包括分发文件相同而跳过复制的情况。也可在空间巡检时运行 `python tools/check_cargo_cache.py`。2026-11-19 的 Release 基线约为 1.93 GiB。实际分配空间超过 3 GiB 时只列出各项占用和定向清理预览命令，打包仍然成功。检查不执行删除，禁止按文件年龄自动淘汰 Release 依赖。
 - **先预览，再定向清理。** 调试结束后可用 `cargo clean --profile dev --target-dir build/cargo --dry-run` 预览 Debug 范围；只需重编主程序时，用 `cargo clean --release -p disk-cleaner --target-dir build/cargo --dry-run` 预览本项目产物。核对绝对路径、取得清理授权后才执行实际清理。保留仍在复用的 Release 依赖、构建脚本和指纹，以及分发程序、测试样本和用户级缓存。
 - 冒烟测试成功后，`tools/smoke.ps1` 在 `work/smoke/` 保留最近 5 次已完成的结果。失败时保留现场，等下次成功再轮换。可运行 `python tools/prune_smoke.py --dry-run` 预览清单。
 
