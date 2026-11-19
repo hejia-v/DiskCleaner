@@ -18,6 +18,8 @@
 - 从仓库根目录、Windows x64 Developer PowerShell 执行 README 的 CMake 命令。日常开发验证和交付默认使用 Release。只有需要调试时才构建 Debug，复用 `build/`，结束后切回 Release。
 - CMake 统一调用 Cargo 并使用 `Cargo.lock`。直接运行 Cargo 也使用仓库的 `.cargo/config.toml`，例如 `cargo test --locked --release` 和 `cargo clippy --locked --release --all-targets`。避免通过环境变量、`--target-dir` 或 IDE 配置把 target 或 build-dir 指向其他位置。
 - 仅由根 `CMakeLists.txt` 的目标属性指定部署位置。正式验证运行 `dist/Release/DiskCleaner.exe`，同目录包含 `vcruntime140.dll`。使用 `ctest --test-dir build -C Release --output-on-failure` 检查回归和分发清单。编译输出和验证产物不提交，修改路径约定时同步更新 CMake、Cargo 配置、README 和验证脚本。
+- 同一配置始终原位覆盖打包。先比较 EXE 和运行库的内容，相同文件跳过。需要替换时，按目标 EXE 的绝对路径识别并终止该路径启动的所有实例，等待退出后再覆盖；这是打包流程的既定授权，无需另行询问。其他目录或配置的同名进程继续运行。
+- 打包失败时修复原因并重试同一目标。禁止通过另存带版本号、时间戳、序号或 `.bak` 的副本来绕过占用。部署临时文件在替换后清理。
 
 ## 控制缓存占用
 

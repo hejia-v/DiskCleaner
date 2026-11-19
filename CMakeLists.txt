@@ -29,12 +29,11 @@ set(cargo_profile "$<IF:$<CONFIG:Debug>,dev,release>")
 set(cargo_output "$<IF:$<CONFIG:Debug>,debug,release>")
 add_custom_target(DiskCleaner ALL
     COMMAND "${CARGO_EXECUTABLE}" build --locked --profile "${cargo_profile}" --target-dir "${cargo_target}"
-    COMMAND "${CMAKE_COMMAND}" -E make_directory
-        "$<TARGET_GENEX_EVAL:DiskCleaner,$<TARGET_PROPERTY:DiskCleaner,RUNTIME_OUTPUT_DIRECTORY>>"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${cargo_target}/${cargo_output}/DiskCleaner.exe"
-        "$<TARGET_GENEX_EVAL:DiskCleaner,$<TARGET_PROPERTY:DiskCleaner,RUNTIME_OUTPUT_DIRECTORY>>/DiskCleaner.exe"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${msvc_runtime}"
-        "$<TARGET_GENEX_EVAL:DiskCleaner,$<TARGET_PROPERTY:DiskCleaner,RUNTIME_OUTPUT_DIRECTORY>>/vcruntime140.dll"
+    COMMAND "${CMAKE_COMMAND}"
+        "-DAPP=${cargo_target}/${cargo_output}/DiskCleaner.exe"
+        "-DRUNTIME=${msvc_runtime}"
+        "-DPACKAGE_DIR=$<TARGET_GENEX_EVAL:DiskCleaner,$<TARGET_PROPERTY:DiskCleaner,RUNTIME_OUTPUT_DIRECTORY>>"
+        -P "${CMAKE_SOURCE_DIR}/tools/deploy.cmake"
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     USES_TERMINAL VERBATIM)
 set_target_properties(DiskCleaner PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/dist/$<CONFIG>")

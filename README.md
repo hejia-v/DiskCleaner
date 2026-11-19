@@ -26,6 +26,8 @@ cmake --build build --config Debug
 
 正式程序位于 `dist/Release/DiskCleaner.exe`，Debug 使用 `dist/Debug/`。CMake 同步部署 `vcruntime140.dll`。这两个文件构成 x64 Windows 上的应用分发内容。Cargo 中间文件位于 `build/cargo/`。图标源文件为 `resources/app.png` 和多尺寸 `resources/app.ico`，通过 `resources/app.rc` 嵌入 EXE，并用于 Windows 大小窗口图标。
 
+重复打包复用同一个分发目录。EXE 和运行库内容相同时，正在运行的程序会继续运行。需要更新时，打包流程会终止从该配置的发布路径启动的实例，再原位替换有变化的文件。
+
 ## 验证
 
 直接运行 Cargo 时也在仓库根目录执行，统一使用 `build/cargo/`。日常验证使用 Release，保留同一套依赖缓存。构建目录约定与缓存清理流程见 [AGENTS.md](AGENTS.md)。
