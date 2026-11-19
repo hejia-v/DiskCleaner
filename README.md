@@ -1,87 +1,84 @@
-# DiskCleaner — Qt 磁盘空间分析器
+# DiskCleaner
 
-本目录包含 C++20 + Qt 6 程序、测试和构建配置。
+DiskCleaner 是用 Rust 和 GPUI 实现的 Windows 磁盘空间分析器。目录树、文件列表和空间图共享同一份扫描快照。支持 NTFS 卷、普通目录、多位置扫描、MFT 转储和 CSV/TSV 快照。Windows 资源管理器、回收站和卷读取均由 Rust 调用系统接口。
 
-界面采用紧凑的浅色工作台样式：暖白背景、炭黑主操作、统一线性图标和分段选择。
-空间图导航支持从路径菜单返回上级目录；层级与分类配色位于图表右上角的选项中。
-主题覆盖列表、表单、下拉菜单、滚动条及业务弹窗，原有深色主题继续可用。
-详细设计与验证见 `docs/modern-light-ui-plan.md` 和 `docs/modern-light-ui-validation.md`。
+扫描结果保持为快照：监听到删除后，原行显示红色背景和删除线，目录下的子项继承删除标记；
+列表顺序、统计和空间图面积保持不变。新增、修改、重命名和监听溢出只提示存在变更，
+不会自动刷新或重新扫描。标记行仍可选中和复制路径，文件操作需先刷新核对。
+按 F5 或点击页面右上角的「刷新」更新当前扫描位置。同一位置刷新尽量保留展开、折叠、选中、排序、搜索和滚动位置。扫描失败或取消时保留旧快照。
 
 ## 构建与运行
 
-本机使用 Qt 6.11.2、MinGW 13.1、CMake 和 Ninja：
-
-Qt 组件需要 Widgets、Network、Svg；启用测试时另需 Test。Svg 用于内置的矢量控件指示器。
+使用 Windows x64、Rust stable（MSVC 工具链）、Visual Studio C++ Build Tools、Windows SDK 和 CMake。默认构建使用 Cargo.lock 锁定的 GPUI 0.2.2。首次编译需要下载 Cargo 依赖。下面的命令使用 Visual Studio 的 x64 Developer PowerShell 和 NMake。
 
 ```powershell
-Set-Location C:\Dev\DiskCleaner
-$env:PATH = 'C:\Qt\Tools\mingw1310_64\bin;C:\Qt\Tools\Ninja;C:\Qt\6.11.2\mingw_64\bin;' + $env:PATH
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++ -DCMAKE_PREFIX_PATH=C:/Qt/6.11.2/mingw_64 -DDISK_CLEANER_BUILD_TESTS=ON
-cmake --build build -j 8
+cmake -S . -B build -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release -DDISK_CLEANER_BUILD_TESTS=ON
+cmake --build build --config Release
 .\dist\Release\DiskCleaner.exe
 ```
 
-正式程序固定生成到 `dist/Release/`，Debug 配置生成到 `dist/Debug/`，与 CMake
-构建缓存位置无关。构建会自动部署 Qt 和编译器运行库，直接启动上述 EXE 即可；
-分发时复制整个配置目录。`build/` 只用于构建缓存和测试工具，旧的
-`build/DiskCleaner.exe` 不再更新。相关约束见 [AGENTS.md](AGENTS.md)。
+NMake 使用单配置构建。需要 Debug 时，复用同一份 CMake 配置目录。调试结束后将 `CMAKE_BUILD_TYPE` 切回 `Release`，再构建、测试并交付正式版。
 
-应用图标源图为 `resources/app.png`，Windows 图标为 `resources/app.ico`，包含
-16、20、24、32、40、48、64、128、256 像素尺寸，同时嵌入 EXE 和 Qt 窗口资源。
+```powershell
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build --config Debug
+```
+
+正式程序位于 `dist/Release/DiskCleaner.exe`，Debug 使用 `dist/Debug/`。CMake 同步部署 `vcruntime140.dll`。这两个文件构成 x64 Windows 上的应用分发内容。Cargo 中间文件位于 `build/cargo/`。图标源文件为 `resources/app.png` 和多尺寸 `resources/app.ico`，通过 `resources/app.rc` 嵌入 EXE，并用于 Windows 大小窗口图标。
 
 ## 验证
 
-在上述环境下运行：
+直接运行 Cargo 时也在仓库根目录执行，统一使用 `build/cargo/`。日常验证使用 Release，保留同一套依赖缓存。构建目录约定与缓存清理流程见 [AGENTS.md](AGENTS.md)。
 
 ```powershell
-$env:QT_FORCE_STDERR_LOGGING = '1'
-ctest --test-dir build --output-on-failure
+ctest --test-dir build -C Release --output-on-failure
 pwsh -NoProfile -File tools\smoke.ps1
+.\dist\Release\DiskCleaner.exe --help
 ```
 
-`tests/` 包含自动化回归测试，`work/sample` 和 `work/dups` 是冒烟测试所需的输入夹具；测试输出写入 `work/smoke`。`smoke/` 是独立的 Qt 环境检查程序。
-
-`ResourceTests` 覆盖异常 MFT 长度/记录数、稀疏记录编号、扫描取消与句柄释放、实时增删/改名后的存储压缩和界面状态，以及后台 MFT 导出和异步关闭。导出界面测试使用可控的 I/O 替身，不需要管理员权限或访问真实磁盘；单个 CTest 测试目标超时为 90 秒。
-
-使用 `dist\Release\DiskCleaner.exe --help` 查看命令行参数。
+Rust 回归用例覆盖目录统计、CSV/TSV 往返、MFT 记录与碎片化卷、取消、导出失败、重命名、重复文件及空间图面积。冒烟脚本从正式入口运行，使用 `work/sample` 和 `work/dups`，将截图和导出文件写入 `work/smoke/` 下的独立目录。
 
 ## 主界面与统计口径
 
-主界面默认采用浅色主题；磁盘与文件夹扫描均可从顶部开始。文件夹支持直接输入路径，
-也可先选择位置，再点击「开始扫描」。菜单中的多位置、MFT、CSV、导出等入口保留。
+目录树以目录名显示扫描根节点，顶部位置栏显示完整扫描路径。悬停在名称上可查看该项的完整路径。每行保留 Windows 系统图标，默认显示最后修改日期和时间。导入快照和已删除的项目按类型显示系统图标，缺少修改时间的项目显示「—」。
 
-「文件大小 / 磁盘占用」同时控制目录树、文件列表、文件类型百分比及空间图。
-列表的「占扫描范围」以当前显示的扫描结果为分母，应用全局筛选后以筛选结果为分母。
-文件列表自身的搜索和显示数量限制不改变该分母。进入空间图的子目录只改变图中查看的范围。
-CSV 导出仍分别保存 Size 与 Allocated 两列，重复文件识别仍使用原有的名称、文件大小、日期策略。
+单击目录树或空间图中的项目，两边会用同一强调色标出对应行和色块。固定高度的底栏显示名称、当前统计口径的大小及父目录，「更多」提供复制路径和标记，切换选中项时可以继续对照原位置的色块。切到文件列表时会定位当前结果中的选中项，回到概览会展开对应目录行。双击空间图中的目录可进入该层，点击图上方的路径面包屑可返回祖先目录。空间不足时优先保留最近两级，更早的层级可从「…」选择。
 
-所属磁盘容量与本次扫描总量分开显示。导入的扫描及多个位置合并的扫描不套用本机磁盘容量。
+宽侧栏显示 Windows 卷标和盘符，窄侧栏显示盘符，悬停可查看卷标。单位置实时扫描会标出结果所在的盘符，多位置扫描和导入的快照不会标记当前卷。
+
+在侧栏点击盘符即可扫描整盘。首次扫描可在窗口中央粘贴路径、选择或拖入文件夹，确认目标后点击「扫描 C 盘」或「扫描此文件夹」。导入快照使用旁边的独立入口。多个位置用分号分隔。扫描中，位置旁显示已发现的项目数和取消按钮。已有结果时点击「更改位置」可直接粘贴新路径并按 Enter 扫描。整盘 NTFS 快速扫描需要卷读取权限，普通权限可使用目录枚举。右键点击文件行可复制、剪切、查看属性或移至回收站。
+
+工具栏的「文件大小 / 磁盘占用」分段控件显示当前统计口径，切换后同时更新容量摘要、目录树、文件列表、文件类型百分比及空间图。
+列表的「占扫描范围」以当前显示的扫描结果为分母，应用全局筛选后以筛选结果为分母。目录树在百分比下方绘制对应比例条。文件列表会显示搜索和筛选后的结果数，超过显示上限时同时显示已列出的数量和匹配总数。从概览定位到显示上限以外的匹配项时，文件列表会显示它所在的一段结果，保留排序和行数限制。点击「返回前 N 项」可回到列表开头。
+应用包含或排除规则时，占比列改为「占筛选结果」，图头同时显示当前范围和扫描总计。文件列表自身的搜索和显示数量限制不改变该分母。进入空间图的子目录只改变图中查看的范围。
+顶部「扫描总计」保留整次扫描的文件数、目录数和大小。文件列表的「当前结果」统计所有匹配项（含显示上限以外的项）；同时显示目录及子项时，大小只累计一次。包含、排除按文字匹配，可选匹配完整路径。收起筛选面板后也可单独移除条件。
+
+实时扫描中，选中经过筛选的目录后，底栏并列显示匹配文件与完整目录的文件数和大小。「回收整个目录」的确认框会列出包含的未匹配文件数。文件列表和目录树支持上下方向键逐行选择，目录树还支持左右键收起、返回父目录和展开。窄窗口中展开或收起筛选和文件类型面板时，当前选中行会保持可见。
+
+查找重复项会将同名同大小（或同名同大小同日期）的文件归入疑似组。组标题显示文件名、单份大小和份数。点击「校验内容」会在后台读取实时文件，先分桶，再逐字节确认相同内容，并将同一候选组拆为「内容相同」和单独的「不同版本」。筛选或清除筛选会保留已校验成员的结果。范围扩大到未校验的成员、组内文件发生变化或重新扫描时，需要重新校验。离线快照仅提供元数据分组。
+
+「当前结果 CSV」包含所有匹配页的数据，并应用 CSV 导出设置。「当前文件类型 CSV」导出类型面板显示的统计；在文件列表收起面板时，按当前结果汇总。「完整快照 CSV」和「完整扫描文件类型 CSV」覆盖整次扫描。导出菜单会预览文件数，Size 和 Allocated 分别表示文件大小和磁盘占用。
+
+文件列表超过显示上限时，可在结果计数旁翻页，或在列表中按 Page Up / Page Down。翻页后可返回原选中项。路径列优先显示相对扫描根目录的父路径；悬停可看绝对路径，键盘选中一行后按 Alt+P 可展开完整路径，按 Esc 返回。
+
+目录树面板变窄时，文件名和大小优先显示，日期缩短到天；悬停日期可查看完整时间，横向滚动可查看其他启用列。空间图标题栏可切换分支色或文件类型色，未分类的文件使用分支色。
+
+结果摘要在一行内显示本次扫描的容量、文件数和目录数，右侧可展开所属卷的可用、已用和总容量。导入的扫描及多个位置合并的扫描不套用本机磁盘容量。
+收起筛选面板后，「筛选」旁的数字表示正在生效的包含、排除条件数。点击「清除筛选」可恢复完整范围。
 可用、未知空间仅在整盘的磁盘占用口径下显示。色块按实际字节数分配，隐藏小色块不会放大其他色块。
+启用名称时，空间图使用深色标题带标识目录，文件色块有足够空间时会在名称下方显示容量。导出的 PNG 使用相同的文字层级。
 
-「文件类型」按钮可展开统计面板，表头右键可选择显示的列；原有的导航、标记、筛选、
-深色主题与文件操作保持可用。扫描失败或取消后保留上次结果，并标明其归属。
+点击「文件类型」可查看各扩展名的数量、大小和占比。目录树通过「列」选择字段，文件列表的「显示」集中设置字段、是否含目录和显示上限。两处均支持点击列标题排序。文件类型表同时列出逻辑大小与磁盘占用，双击类型可在同一统计范围内查看精确扩展名（含无扩展名）的文件。点击「查看整个扫描」扩大范围，点击「清除搜索」只移除文件名关键词。窄窗口在文件名下显示父目录，横向滚动可查看其余已启用列。文件可从实时扫描结果拖到资源管理器。侧栏的「设置」可切换主题和语言，调整空间图层级、标记和 PNG 分辨率。页面右上角的「导出」提供 CSV 字段设置及空间图导出。宽窗口中可拖动分隔条调整目录树与空间图的宽度，窄窗口中可用「目录树」「空间图」切换视图。空间图支持 Backspace 返回、Shift+Backspace 前进、Ctrl+Home 回到根目录、Ctrl 加减号调节层级。数字 1–4 切换选中项标记，0 清除当前子树的标记。
 
-运行主界面截图验证（需要本机已有的 Pillow）：
+## 窗口与空间图验证
 
 ```powershell
 python tools\verify_mainwindow.py --dry-run
-python tools\verify_mainwindow.py --apply
+python tools\verify_mainwindow.py --apply --extended
+python tools\verify_treemap.py --dry-run
+python tools\verify_treemap.py --apply
+python tools\verify_snapshot.py --dry-run
+python tools\verify_snapshot.py --apply
 ```
 
-该脚本捕获浅色、深色、空状态、文件列表、紧凑窗口及 150% 缩放画面，将证据写入
-`work/ui-redesign/`，完成后恢复用户设置。
-
-新版主题扩展截图（增加 125%/200%、英文与项目扫描）及隔离弹窗验证：
-
-```powershell
-python tools\verify_mainwindow.py --dry-run --output work\agent-light-ui --skip-comparison --extended
-python tools\verify_mainwindow.py --apply --output work\agent-light-ui --skip-comparison --extended
-$env:QT_QPA_PLATFORM = 'offscreen'
-$env:QT_QPA_PLATFORM_PLUGIN_PATH = 'C:\Qt\6.11.2\mingw_64\plugins\platforms'
-$env:QT_QPA_FONTDIR = 'C:\Windows\Fonts'
-$env:QT_FORCE_STDERR_LOGGING = '1'
-.\build\UiPreview.exe .\work\sample .\work\agent-light-ui\controls
-```
-
-`UiPreview` 随测试目标构建，使用临时设置目录；所有导出与多位置对话框只检查后取消，
-不提交文件操作。主窗口截图也可在设置 `QT_QPA_PLATFORM=offscreen` 后运行，避免占用桌面。
+窗口验证需要 Pillow，从正式 Release 程序捕获真实 GPUI 窗口。窗口尺寸以逻辑像素指定，实际截图尺寸取决于当前显示器的 Windows 缩放设置。

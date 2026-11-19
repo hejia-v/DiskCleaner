@@ -4,9 +4,8 @@
 $ErrorActionPreference = 'Continue'
 $root = Split-Path -Parent $PSScriptRoot
 $exe = Join-Path $root 'dist\Release\DiskCleaner.exe'
-$tmp = Join-Path $root 'work\smoke'
+$tmp = Join-Path $root ('work\smoke\' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
-$env:PATH = "C:\Qt\6.11.2\mingw_64\bin;$env:PATH"
 
 $script:fail = 0
 $script:pass = 0
@@ -22,8 +21,8 @@ function Check([string]$name, [bool]$ok, [string]$detail = '') {
 }
 
 function Run([string[]]$arguments) {
-    $p = Start-Process -FilePath $exe -ArgumentList $arguments -PassThru -Wait -NoNewWindow
-    return $p.ExitCode
+    & $exe @arguments | Out-Host
+    return $LASTEXITCODE
 }
 
 # 1) NTFS record parser self-test
@@ -32,7 +31,6 @@ Check 'selftest' (($LASTEXITCODE -eq 0) -and ($out -match 'selftest PASS')) $out
 
 # 2) folder scan + CSV export
 $csv = Join-Path $tmp 'export.csv'
-Remove-Item $csv -ErrorAction SilentlyContinue
 $code = Run @('--scan', (Join-Path $root 'work\sample'), '--export', $csv,
               '--shot', (Join-Path $tmp 'scan.png'), '--delay', '2000')
 $head = if (Test-Path $csv) { (Get-Content $csv -TotalCount 1) } else { '' }
@@ -45,7 +43,6 @@ Check 'import csv round-trip' (($LASTEXITCODE -eq 0) -and ($out -match 'size 503
 
 # 4) full-column export
 $full = Join-Path $tmp 'full.csv'
-Remove-Item $full -ErrorAction SilentlyContinue
 $code = Run @('--scan', (Join-Path $root 'work\sample'), '--export-full', $full,
               '--shot', (Join-Path $tmp 'full.png'), '--delay', '2000')
 $head = if (Test-Path $full) { (Get-Content $full -TotalCount 1) } else { '' }
@@ -54,7 +51,6 @@ Check 'export full columns' (($code -eq 0) -and ($head -match 'MFTRECNO') -and
 
 # 5) synthetic MFT dump + load
 $mft = Join-Path $tmp 'synthetic.mft'
-Remove-Item $mft -ErrorAction SilentlyContinue
 $code = Run @('--make-mft', $mft, '2000')
 $out = & $exe --scan-mft $mft 2>&1 | Out-String
 Check 'mft dump build+load' (($code -eq 0) -and ($out -match 'nodes= 2006') -and
@@ -85,15 +81,22 @@ Check 'light theme + english' ($code -eq 0)
 $http = Join-Path $tmp 'http'
 New-Item -ItemType Directory -Force -Path $http | Out-Null
 "VERSION|9.99`nINFOURL|https://example.com/releases" | Set-Content -Path (Join-Path $http 'ver.txt') -Encoding ASCII
-$server = Start-Process -FilePath 'C:\Python\Python314\python.exe' `
-    -ArgumentList '-m', 'http.server', '8137', '--bind', '127.0.0.1', '--directory', $http `
-    -PassThru -WindowStyle Hidden
-Start-Sleep -Seconds 2
-$out = & $exe --check-update 'http://127.0.0.1:8137/ver.txt' 2>&1 | Out-String
-Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
+$listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+$listener.Start()
+$port = $listener.LocalEndpoint.Port
+$listener.Stop()
+$server = Start-Process -FilePath (Get-Command python).Source -WorkingDirectory $http `
+    -ArgumentList '-m', 'http.server', $port, '--bind', '127.0.0.1' -PassThru -WindowStyle Hidden
+try {
+    Start-Sleep -Seconds 1
+    $out = & $exe --check-update "http://127.0.0.1:$port/ver.txt" 2>&1 | Out-String
+} finally {
+    if (-not $server.HasExited) { $server.Kill(); $server.WaitForExit() }
+}
 Check 'update check' (($LASTEXITCODE -eq 0) -and ($out -match 'newer= true') -and
                       ($out -match 'version= "9.99"')) $out.Trim()
 
 Write-Host ""
 Write-Host ("SMOKE RESULT: " + $script:pass + " passed, " + $script:fail + " failed")
+Write-Host "Artifacts: $tmp"
 exit $(if ($script:fail -eq 0) { 0 } else { 1 })

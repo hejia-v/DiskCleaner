@@ -1,79 +1,52 @@
 cmake_minimum_required(VERSION 3.21)
-project(DiskCleaner VERSION 0.1 LANGUAGES CXX)
+file(REAL_PATH "${CMAKE_SOURCE_DIR}/build" expected_build)
+file(REAL_PATH "${CMAKE_BINARY_DIR}" actual_build)
+string(TOLOWER "${expected_build}" expected_build)
+string(TOLOWER "${actual_build}" actual_build)
+if(NOT actual_build STREQUAL expected_build)
+    message(FATAL_ERROR "Configure DiskCleaner in its shared build directory: cmake -S . -B build")
+endif()
+project(DiskCleaner VERSION 0.1 LANGUAGES NONE)
 
-set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_AUTOMOC ON)
-set(CMAKE_AUTORCC ON)
-set(CMAKE_INCLUDE_CURRENT_DIR ON)
-
-find_package(Qt6 REQUIRED COMPONENTS Widgets Network Svg)
-qt_standard_project_setup()
-
-set(DiskCleaner_SOURCES
-    src/core.cpp
-    src/deletionwatcher.cpp
-    src/liveupdate.cpp
-    src/liveupdateio.cpp
-    src/models.cpp
-    src/treemap.cpp
-    src/mainwindow.cpp
-    src/i18n.cpp
-    src/shellintegration.cpp
-    src/theme.cpp
-    src/uiicons.cpp
-    resources/ui.qrc
-    src/updatecheck.cpp
-)
-
-qt_add_executable(DiskCleaner src/main.cpp ${DiskCleaner_SOURCES})
-
-# Stable application location, independent of generator and binary directory.
+if(NOT WIN32)
+    message(FATAL_ERROR "DiskCleaner requires Windows")
+endif()
 if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build configuration" FORCE)
 endif()
-set_target_properties(DiskCleaner PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/dist/$<CONFIG>")
-if(WIN32)
-    target_sources(DiskCleaner PRIVATE resources/app.rc)
-    get_target_property(qt_qmake_executable Qt6::qmake IMPORTED_LOCATION)
-    get_filename_component(qt_bin_directory "${qt_qmake_executable}" DIRECTORY)
-    find_program(DISK_CLEANER_WINDEPLOYQT windeployqt HINTS "${qt_bin_directory}" REQUIRED)
-    add_custom_command(TARGET DiskCleaner POST_BUILD
-        COMMAND "${DISK_CLEANER_WINDEPLOYQT}" --no-translations
-                --no-system-d3d-compiler --no-opengl-sw
-                --dir "$<TARGET_FILE_DIR:DiskCleaner>" "$<TARGET_FILE:DiskCleaner>"
-        COMMENT "Deploying Qt runtime to the fixed application directory"
-        VERBATIM)
+
+find_program(CARGO_EXECUTABLE cargo REQUIRED)
+# Ship the MSVC runtime imported by the Windows Rust toolchain alongside the executable.
+file(GLOB msvc_runtimes "$ENV{ProgramFiles}/Microsoft Visual Studio/*/*/VC/Redist/MSVC/*/x64/Microsoft.VC*.CRT/vcruntime140.dll")
+list(SORT msvc_runtimes COMPARE NATURAL ORDER DESCENDING)
+if(msvc_runtimes)
+    list(GET msvc_runtimes 0 msvc_runtime)
+else()
+    find_file(msvc_runtime vcruntime140.dll HINTS "$ENV{SystemRoot}/System32" REQUIRED)
 endif()
+set(cargo_target "${CMAKE_SOURCE_DIR}/build/cargo")
+set(cargo_profile "$<IF:$<CONFIG:Debug>,dev,release>")
+set(cargo_output "$<IF:$<CONFIG:Debug>,debug,release>")
+add_custom_target(DiskCleaner ALL
+    COMMAND "${CARGO_EXECUTABLE}" build --locked --profile "${cargo_profile}" --target-dir "${cargo_target}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory
+        "$<TARGET_GENEX_EVAL:DiskCleaner,$<TARGET_PROPERTY:DiskCleaner,RUNTIME_OUTPUT_DIRECTORY>>"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${cargo_target}/${cargo_output}/DiskCleaner.exe"
+        "$<TARGET_GENEX_EVAL:DiskCleaner,$<TARGET_PROPERTY:DiskCleaner,RUNTIME_OUTPUT_DIRECTORY>>/DiskCleaner.exe"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${msvc_runtime}"
+        "$<TARGET_GENEX_EVAL:DiskCleaner,$<TARGET_PROPERTY:DiskCleaner,RUNTIME_OUTPUT_DIRECTORY>>/vcruntime140.dll"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    USES_TERMINAL VERBATIM)
+set_target_properties(DiskCleaner PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/dist/$<CONFIG>")
 
-target_link_libraries(DiskCleaner PRIVATE Qt6::Widgets Qt6::Network Qt6::Svg)
-target_compile_definitions(DiskCleaner PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
-target_link_libraries(DiskCleaner PRIVATE shell32 advapi32)
-
-option(DISK_CLEANER_BUILD_TESTS "Build treemap and table integration tests" OFF)
+option(DISK_CLEANER_BUILD_TESTS "Enable Rust regression tests" ON)
 if(DISK_CLEANER_BUILD_TESTS)
     enable_testing()
-    find_package(Qt6 REQUIRED COMPONENTS Test)
-    qt_add_executable(UiPreview tests/ui_preview.cpp ${DiskCleaner_SOURCES})
-    target_include_directories(UiPreview PRIVATE src)
-    target_compile_definitions(UiPreview PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
-    target_link_libraries(UiPreview PRIVATE Qt6::Widgets Qt6::Network Qt6::Svg Qt6::Test shell32 advapi32)
-    qt_add_executable(TreemapTests tests/treemap_tests.cpp ${DiskCleaner_SOURCES})
-    target_include_directories(TreemapTests PRIVATE src)
-    target_compile_definitions(TreemapTests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
-    target_link_libraries(TreemapTests PRIVATE Qt6::Widgets Qt6::Network Qt6::Svg Qt6::Test shell32 advapi32)
-    add_test(NAME treemap COMMAND TreemapTests)
-    qt_add_executable(ResourceTests tests/resource_tests.cpp ${DiskCleaner_SOURCES})
-    target_include_directories(ResourceTests PRIVATE src)
-    target_compile_definitions(ResourceTests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
-    target_link_libraries(ResourceTests PRIVATE Qt6::Widgets Qt6::Network Qt6::Svg Qt6::Test shell32 advapi32)
-    add_test(NAME resources COMMAND ResourceTests)
-    get_target_property(qt_qmake Qt6::qmake IMPORTED_LOCATION)
-    execute_process(COMMAND "${qt_qmake}" -query QT_INSTALL_PLUGINS
-                    OUTPUT_VARIABLE qt_plugins OUTPUT_STRIP_TRAILING_WHITESPACE)
-    set_tests_properties(treemap resources PROPERTIES TIMEOUT 90
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=${qt_plugins}/platforms;QT_FORCE_STDERR_LOGGING=1")
+    add_test(NAME rust-regressions COMMAND "${CARGO_EXECUTABLE}" test --locked --profile "${cargo_profile}"
+        --manifest-path "${CMAKE_SOURCE_DIR}/Cargo.toml" --target-dir "${cargo_target}")
+    add_test(NAME ntfs-selftest COMMAND "${CMAKE_SOURCE_DIR}/dist/$<CONFIG>/DiskCleaner.exe" --selftest)
+    add_test(NAME distribution-contents COMMAND "${CMAKE_COMMAND}"
+        "-DPACKAGE_DIR=${CMAKE_SOURCE_DIR}/dist/$<CONFIG>" -P "${CMAKE_SOURCE_DIR}/tools/check_package.cmake")
 endif()
 
 

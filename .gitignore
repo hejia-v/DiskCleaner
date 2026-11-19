@@ -1,6 +1,6 @@
 /build/
 /dist/
-/smoke/build/
+/target/
 /.codex_tmp/
 /work/*
 !/work/sample/

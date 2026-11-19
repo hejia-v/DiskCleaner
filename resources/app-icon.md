@@ -1,7 +1,7 @@
 # 应用图标
 
 使用内置 imagegen 生成透明背景原图 `app.png`；`app.ico` 为同一图像的多尺寸
-Windows 编码。EXE 通过 `app.rc` 使用该图标，Qt 通过 `ui.qrc` 使用该图标。
+Windows 编码。EXE 通过 `app.rc` 使用该图标，GPUI 窗口从 EXE 资源加载大小图标。
 
 生成提示词：
 
