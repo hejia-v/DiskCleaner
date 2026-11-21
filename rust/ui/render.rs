@@ -127,7 +127,7 @@ impl Dashboard {
                     .gap_1()
                     .px_2()
                     .rounded_md()
-                    .bg(rgb(if self.dark { 0x2b4168 } else { 0xe9efff }))
+                    .bg(self.palette().accent_soft)
                     .cursor_pointer()
                     .child(div().min_w_0().truncate().child(label.clone()))
                     .child("×")
@@ -255,7 +255,7 @@ impl Dashboard {
             .w_full()
             .h(px(if two_lines { 46. } else { RESULT_ROW_HEIGHT }))
             .px_2()
-            .bg(rgb(if self.dark { 0x27374e } else { 0xedf3fa }))
+            .bg(self.palette().panel_alt)
             .flex()
             .items_center()
             .gap_2()
@@ -270,15 +270,22 @@ impl Dashboard {
                 None if verified => t("Recheck group", "重新校验"),
                 None => t("Compare content", "校验内容"),
             };
+            let p = self.palette();
             heading = heading.child(
                 div()
                     .id(("compare-group", page[0]))
                     .flex_none()
-                    .px_2()
-                    .rounded_md()
+                    .h(px(24.))
+                    .px(px(8.))
+                    .rounded(px(6.))
+                    .flex()
+                    .items_center()
+                    .text_color(p.text_secondary)
+                    .bg(p.panel)
                     .border_1()
-                    .border_color(self.muted())
+                    .border_color(p.border_strong)
                     .cursor_pointer()
+                    .hover(move |d| d.bg(p.hover))
                     .child(text)
                     .when_some(
                         result.and_then(|r| {
@@ -435,10 +442,10 @@ impl Dashboard {
             })
     }
     fn selection_accent(&self) -> Rgba {
-        rgb(if self.dark { 0x88afff } else { 0x2759c5 })
+        self.palette().accent
     }
     fn divider(&self) -> Rgba {
-        rgb(if self.dark { 0x38465e } else { 0xd8e1ed })
+        self.palette().border
     }
     fn button(
         &self,
@@ -447,54 +454,48 @@ impl Dashboard {
         active: bool,
         cx: &Context<Self>,
     ) -> Stateful<Div> {
-        let primary = active && matches!(id, "scan" | "folder" | "apply-edit" | "csv");
-        let (bg, fg, line) = if primary {
-            (0x345bc1, 0xffffff, 0x345bc1)
-        } else if active && self.dark {
-            (0x2b4168, 0xd9e6ff, 0x5273aa)
+        let p = self.palette();
+        let primary = active && matches!(id, "scan" | "apply-edit" | "csv");
+        let danger = matches!(id, "recycle");
+        let (bg, fg) = if primary {
+            (p.primary, p.primary_ink)
         } else if active {
-            (0xe9efff, 0x24499d, 0xc0cff3)
-        } else if self.dark {
-            (0x222d40, 0xe3eaf7, 0x41506a)
+            (p.accent_soft, p.accent_ink)
+        } else if danger {
+            (rgba(0x00000000), p.danger)
         } else {
-            (0xffffff, 0x32435d, 0xd5dfec)
+            (rgba(0x00000000), p.text_secondary)
         };
-        let quiet = !active && matches!(id, "tree-columns" | "reveal" | "open" | "recycle");
         div()
             .id(id)
             .focusable()
             .tab_stop(true)
-            .focus(|d| d.border_color(rgb(0x618be3)))
             .flex_none()
             .h(px(30.))
-            .px_2()
+            .px(px(9.))
             .flex()
             .items_center()
             .justify_center()
-            .bg(if quiet {
-                transparent_black()
-            } else {
-                rgb(bg).into()
-            })
-            .text_color(rgb(fg))
+            .gap(px(6.))
+            .rounded(px(6.))
+            .bg(bg)
+            .text_size(px(13.))
+            .text_color(fg)
             .border_1()
-            .border_color(if quiet {
-                transparent_black()
-            } else {
-                rgb(line).into()
-            })
-            .rounded_md()
+            .border_color(transparent_black())
             .cursor_pointer()
-            .active(|d| d.bg(rgb(if self.dark { 0x384f71 } else { 0xdce6f5 })))
-            .hover(|s| {
-                s.border_color(rgb(0x7395dd)).bg(rgb(if primary {
-                    0x284ba8
-                } else if self.dark {
-                    0x30405d
+            .when(primary, |d| d.font_weight(FontWeight::MEDIUM))
+            .hover(move |s| {
+                if primary {
+                    s.opacity(0.9)
+                } else if active {
+                    s.bg(p.accent_soft)
                 } else {
-                    0xeef3ff
-                }))
+                    s.bg(p.hover)
+                }
             })
+            .active(|d| d.bg(p.pressed))
+            .focus(|d| d.border_color(p.accent))
             .child(label.into())
             .on_key_down(cx.listener(move |s, key: &KeyDownEvent, w, cx| {
                 if matches!(key.keystroke.key.as_str(), "enter" | "space") {
@@ -508,11 +509,12 @@ impl Dashboard {
         div().flex().items_center().gap_2().flex_wrap()
     }
     fn panel(&self) -> Div {
+        let p = self.palette();
         div()
-            .bg(rgb(if self.dark { 0x1d2738 } else { 0xffffff }))
+            .bg(p.panel)
             .border_1()
-            .border_color(rgb(if self.dark { 0x38465e } else { 0xd8e1ed }))
-            .rounded_lg()
+            .border_color(p.border)
+            .rounded(px(10.))
             .overflow_hidden()
     }
     fn file_order(&self, narrow: bool) -> [usize; 9] {
@@ -563,10 +565,12 @@ impl Dashboard {
             .gap_2()
             .h(px(28.))
             .flex_none()
-            .bg(rgb(if self.dark { 0x273348 } else { 0xf1f5fa }))
-            .text_color(self.muted())
+            .bg(transparent_black())
+            .border_b_1()
+            .border_color(self.palette().border)
+            .text_color(self.palette().muted)
             .text_xs()
-            .font_weight(FontWeight::SEMIBOLD);
+            .font_weight(FontWeight::MEDIUM);
         let (mask, sort, descending) = if flat {
             (
                 self.file_mask(narrow),
@@ -594,7 +598,7 @@ impl Dashboard {
                 "{}{}",
                 self.column_label(flat, i),
                 if selected {
-                    if descending { " ▾" } else { " ▴" }
+                    if descending { " ↓" } else { " ↑" }
                 } else {
                     ""
                 }
@@ -722,7 +726,7 @@ impl Dashboard {
                                 .flex()
                                 .items_center()
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .bg(rgb(if s.dark { 0x27374e } else { 0xedf3fa }))
+                                .bg(s.palette().panel_alt)
                                 .child(s.text("Other results", "其他结果"))
                         });
                         continue;
@@ -735,21 +739,18 @@ impl Dashboard {
                     } else {
                         s.selected == id
                     };
-                    let color = if deleted {
-                        0xa74235
-                    } else if s.dark {
-                        0xe2e7e5
-                    } else {
-                        0x263750
-                    };
+                    let p = s.palette();
+                    let color = if deleted { p.danger } else { p.text };
                     let bg = if deleted {
-                        if s.dark { 0x472b2d } else { 0xfce8e4 }
+                        if s.dark {
+                            rgba(0x2E1B1BFF)
+                        } else {
+                            rgba(0xFEF3F2FF)
+                        }
                     } else if selected {
-                        if s.dark { 0x334972 } else { 0xe2ebff }
-                    } else if s.dark {
-                        0x1d2738
+                        p.accent_soft
                     } else {
-                        0xffffff
+                        rgba(0x00000000)
                     };
                     let whole = s.view.weights[0];
                     let percent = if whole == 0 {
@@ -765,24 +766,11 @@ impl Dashboard {
                         .flex()
                         .items_center()
                         .gap_2()
-                        .bg(rgb(bg))
+                        .bg(bg)
                         .relative()
-                        .when(selected && s.explicit_selection, |row| {
-                            row.child(
-                                div()
-                                    .absolute()
-                                    .left_0()
-                                    .top_0()
-                                    .bottom_0()
-                                    .w(px(3.))
-                                    .bg(s.selection_accent()),
-                            )
-                        })
-                        .text_color(rgb(color))
-                        .border_b_1()
-                        .border_color(rgb(if s.dark { 0x2f3b50 } else { 0xedf1f7 }))
+                        .text_color(color)
                         .when(!selected && !deleted, |d| {
-                            d.hover(|d| d.bg(rgb(if s.dark { 0x27344b } else { 0xf3f6fc })))
+                            d.hover(move |d| d.bg(p.row_hover))
                         })
                         .cursor_pointer()
                         .on_mouse_down(
@@ -845,22 +833,26 @@ impl Dashboard {
                         .gap_1()
                         .overflow_hidden();
                     if !flat {
-                        let arrow = if n.dir {
-                            if s.expanded.contains(&id) {
-                                "▾"
-                            } else {
-                                "▸"
-                            }
-                        } else {
-                            ""
-                        };
                         name_cell = name_cell.child(
                             div()
                                 .id(("expander", i))
                                 .ml(px((depth.min(10) * 10) as f32))
                                 .flex_none()
-                                .w_3()
-                                .child(arrow)
+                                .w(px(14.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .when(n.dir, |d| {
+                                    d.child(chrome::icon(
+                                        if s.expanded.contains(&id) {
+                                            "chevron-down"
+                                        } else {
+                                            "chevron-right"
+                                        },
+                                        12.,
+                                        s.palette().muted,
+                                    ))
+                                })
                                 .on_click(cx.listener(move |s, _, w, cx| {
                                     cx.stop_propagation();
                                     s.focus.focus(w);
@@ -995,12 +987,12 @@ impl Dashboard {
                                         .h(px(3.))
                                         .rounded_sm()
                                         .overflow_hidden()
-                                        .bg(rgb(if s.dark { 0x354359 } else { 0xeaf0f6 }))
+                                        .bg(s.palette().bar_track)
                                         .child(
                                             div()
                                                 .h_full()
                                                 .w(relative((percent / 100.).clamp(0., 1.) as f32))
-                                                .bg(rgb(if s.dark { 0x718cb4 } else { 0x9bb4d5 })),
+                                                .bg(s.palette().accent),
                                         ),
                                 )
                             } else {
@@ -1126,7 +1118,7 @@ impl Dashboard {
             .flex_1()
             .min_h_0()
             .overflow_hidden()
-            .bg(rgb(if self.dark { 0x252e2a } else { 0xecf0eb }));
+            .bg(self.palette().panel_alt);
         let Some(t) = &self.tree else { return chart };
         let view = cx.weak_entity();
         let measured = self.chart_size;
@@ -1224,10 +1216,10 @@ impl Dashboard {
                     .h(relative(r.h / height))
                     .bg(rgb(color))
                     .border_1()
-                    .border_color(rgb(0xf4f7fb))
+                    .border_color(self.palette().panel)
                     .overflow_hidden()
                     .cursor_pointer()
-                    .hover(|s| s.border_color(rgb(0x345bc1)))
+                    .hover(|s| s.border_color(self.palette().accent))
                     .when(c.header > 0., |s| {
                         s.child(
                             div()
@@ -1236,8 +1228,8 @@ impl Dashboard {
                                 .line_height(px(c.header))
                                 .px_2()
                                 .truncate()
-                                .bg(rgb(map::folder_band(color)))
-                                .text_color(rgb(0xffffff))
+                                .bg(rgb(map::folder_band(color, self.dark)))
+                                .text_color(self.palette().text)
                                 .text_xs()
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .child(map::label(t, id, self.zh)),
@@ -1397,12 +1389,12 @@ impl Render for Dashboard {
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(if self.dark { 0x141d2b } else { 0xf2f5fa }))
-            .text_color(rgb(if self.dark { 0xe6edf8 } else { 0x1d2d46 }))
-            .text_sm()
+            .bg(self.palette().canvas)
+            .text_color(self.palette().text)
+            .text_size(px(13.))
             .font(Font {
-                features: FontFeatures(Arc::new(vec![("tnum".into(), 1)])),
-                ..font("Segoe UI")
+                features: theme::tnum(),
+                ..font(theme::UI_FONT)
             });
         // A focus-tracked ancestor would consume caption mouse-down before Win32 handles it.
         let end_drag =
@@ -1601,36 +1593,18 @@ impl Render for Dashboard {
                     )
                 })
                 .child(
-                    div()
-                        .flex_none()
-                        .flex()
-                        .items_center()
-                        .h(px(30.))
-                        .p(px(2.))
-                        .gap(px(2.))
-                        .rounded(px(7.))
-                        .border_1()
-                        .border_color(self.divider())
-                        .bg(rgb(if self.dark { 0x243248 } else { 0xfafcfe }))
-                        .child(
-                            self.command("types", self.types, cx)
-                                .h(px(24.))
-                                .rounded(px(4.))
-                                .child(chrome::glyph("\u{E71D}", 13.))
-                                .child(t("File types", "文件类型")),
-                        )
-                        .child(div().h(px(12.)).w(px(1.)).bg(self.divider()))
-                        .child(
-                            self.command("filter", self.filters || filter_count > 0, cx)
-                                .h(px(24.))
-                                .rounded(px(4.))
-                                .child(chrome::glyph("\u{E71C}", 13.))
-                                .child(if filter_count == 0 {
-                                    filter_label.to_owned()
-                                } else {
-                                    format!("{filter_label} · {filter_count}")
-                                }),
-                        ),
+                    self.command("types", self.types, cx)
+                        .child(chrome::icon("table", 14., self.palette().text_secondary))
+                        .child(t("File types", "文件类型")),
+                )
+                .child(
+                    self.command("filter", self.filters || filter_count > 0, cx)
+                        .child(chrome::icon("funnel", 14., self.palette().text_secondary))
+                        .child(if filter_count == 0 {
+                            filter_label.to_owned()
+                        } else {
+                            format!("{filter_label} · {filter_count}")
+                        }),
                 )
                 .when(filter_count > 0, |d| {
                     d.child(
@@ -1638,11 +1612,7 @@ impl Render for Dashboard {
                             .child(t("Clear filters", "清除筛选")),
                     )
                 });
-            page = page.child(
-                controls
-                    .child(div().w(px(1.)).h(px(16.)).bg(self.divider()))
-                    .child(self.size_selector(w, cx)),
-            );
+            page = page.child(controls.child(self.size_selector(w, cx)));
         }
         if loaded && self.export_panel {
             let mut pane = self.panel().p_2().flex().gap_1().flex_wrap();
@@ -1846,34 +1816,33 @@ impl Render for Dashboard {
                 .min_h_0()
                 .child(
                     self.line()
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w(px(112.))
-                                .child(Input::new(&self.search)),
-                        )
+                        .child(div().flex_1().min_w(px(112.)).child(
+                            Input::new(&self.search).border_color(self.palette().input_border),
+                        ))
                         .child(
                             div()
                                 .flex()
                                 .items_center()
                                 .gap_1()
-                                .child(self.button(
-                                    "dup",
-                                    match self.options.dup {
-                                        1 => t("Name + size", "同名同大小"),
-                                        2 => t("Name + size + date", "同名同大小同日期"),
-                                        _ => t("Find duplicates", "查找重复项"),
-                                    },
-                                    self.options.dup != 0,
-                                    cx,
-                                ))
+                                .child(
+                                    self.button(
+                                        "dup",
+                                        match self.options.dup {
+                                            1 => t("Name + size", "同名同大小"),
+                                            2 => t("Name + size + date", "同名同大小同日期"),
+                                            _ => t("Find duplicates", "查找重复项"),
+                                        },
+                                        self.options.dup != 0,
+                                        cx,
+                                    )
+                                    .h(px(30.)),
+                                )
                                 .when(self.options.dup != 0, |d| {
                                     d.when(!self.options.only, |d| {
-                                        d.child(b(
-                                            "only",
-                                            t("Candidates only", "只看疑似重复"),
-                                            false,
-                                        ))
+                                        d.child(
+                                            b("only", t("Candidates only", "只看疑似重复"), false)
+                                                .h(px(30.)),
+                                        )
                                     })
                                     .child(
                                         div().text_xs().text_color(self.muted()).child(format!(
@@ -1884,7 +1853,7 @@ impl Render for Dashboard {
                                     )
                                 }),
                         )
-                        .child(b("columns", t("Display", "显示"), self.columns_open)),
+                        .child(b("columns", t("Display", "显示"), self.columns_open).h(px(30.))),
                 )
                 .child(self.result_summary(cx))
                 .when_some(self.options.type_filter.as_ref(), |p, (scope, ext)| {
@@ -2025,21 +1994,21 @@ impl Render for Dashboard {
                         .bg(Hsla::from(self.divider()).opacity(0.30))
                         .child(self.map_nav_button(
                             "back",
-                            "\u{E72B}",
+                            "arrow-left",
                             t("Back (Alt+Left)", "后退 (Alt+←)"),
                             !self.history.is_empty(),
                             cx,
                         ))
                         .child(self.map_nav_button(
                             "forward",
-                            "\u{E72A}",
+                            "arrow-right",
                             t("Forward (Alt+Right)", "前进 (Alt+→)"),
                             !self.future.is_empty(),
                             cx,
                         ))
                         .child(self.map_nav_button(
                             "up",
-                            "\u{E74A}",
+                            "arrow-up",
                             t("Parent folder (Alt+Up)", "上一级 (Alt+↑)"),
                             self.root != 0,
                             cx,
@@ -2170,7 +2139,7 @@ impl Render for Dashboard {
                                     .when(self.split_drag.is_some(), |d| {
                                         d.bg(self.selection_accent())
                                     })
-                                    .group_hover("splitter", |d| d.bg(rgb(0x7395dd))),
+                                    .group_hover("splitter", |d| d.bg(self.palette().accent)),
                             )
                             .on_mouse_down(
                                 MouseButton::Left,
@@ -2216,7 +2185,7 @@ impl Render for Dashboard {
             .gap_2()
             .min_w_0()
             .flex_none()
-            .when(loaded, |d| d.h(px(32.)));
+            .when(loaded, |d| d.h(px(30.)));
         if loaded
             && let Some(tree) = &self.tree
             && ((self.pane == 0 && self.explicit_selection && self.view.included[self.selected])
@@ -2263,7 +2232,7 @@ impl Render for Dashboard {
                     .max_w(px(content_width * 0.34))
                     .id("selection-path")
                     .track_focus(&self.path_focus)
-                    .focus(|d| d.bg(rgb(if self.dark { 0x334972 } else { 0xe2ebff })))
+                    .focus(|d| d.bg(self.palette().accent_soft))
                     .on_click(cx.listener(|s, _, w, _| s.path_focus.focus(w)))
                     .on_key_down(cx.listener(|s, key: &KeyDownEvent, w, cx| {
                         if key.keystroke.key == "escape" {

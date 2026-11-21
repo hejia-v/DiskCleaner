@@ -1,4 +1,5 @@
 use super::*;
+use gpui::{Svg, svg};
 use gpui_component::{
     button::{Button, ButtonCustomVariant, ButtonVariants},
     menu::DropdownMenu,
@@ -18,23 +19,15 @@ pub(super) fn glyph(symbol: &'static str, size: f32) -> Div {
         .child(symbol)
 }
 
+pub(super) fn icon(name: &str, size: f32, color: Rgba) -> Svg {
+    svg()
+        .path(SharedString::from(format!("icons/{name}.svg")))
+        .flex_none()
+        .size(px(size))
+        .text_color(color)
+}
+
 impl Dashboard {
-    fn control_color(&self, light: u32, dark: u32) -> Rgba {
-        rgb(if self.dark { dark } else { light })
-    }
-
-    fn control_ink(&self) -> Rgba {
-        self.control_color(0x354761, 0xd6e2f3)
-    }
-
-    fn control_hover(&self) -> Rgba {
-        self.control_color(0xe5ecf7, 0x32435d)
-    }
-
-    fn control_pressed(&self) -> Rgba {
-        self.control_color(0xd3e0f3, 0x405674)
-    }
-
     fn command_surface(&self, id: &'static str) -> Stateful<Div> {
         div()
             .id(id)
@@ -48,7 +41,7 @@ impl Dashboard {
             .border_1()
             .border_color(transparent_black())
             .text_size(px(13.))
-            .text_color(self.control_ink())
+            .text_color(self.palette().text_secondary)
             // Mouse commands keep keyboard focus in the working pane. Tab still shows a focus ring.
             .on_mouse_down(MouseButton::Left, |_, w, _| w.prevent_default())
     }
@@ -59,31 +52,31 @@ impl Dashboard {
         selected: bool,
         cx: &Context<Self>,
     ) -> Stateful<Div> {
+        let p = self.palette();
         self.command_surface(id)
             .px(px(8.))
             .cursor_pointer()
             .focusable()
             .tab_stop(true)
             .when(selected, |d| {
-                d.bg(self.control_color(0xe0eaff, 0x2a4167))
-                    .text_color(self.selection_accent())
-                    .font_weight(FontWeight::SEMIBOLD)
+                d.bg(p.accent_soft)
+                    .text_color(p.accent_ink)
+                    .font_weight(FontWeight::MEDIUM)
             })
-            .hover(|d| d.bg(self.control_hover()))
-            .active(|d| d.bg(self.control_pressed()))
-            .focus(|d| d.border_color(self.selection_accent()))
+            .hover(move |d| d.bg(p.hover))
+            .active(move |d| d.bg(p.pressed))
+            .focus(move |d| d.border_color(p.accent))
             .on_click(cx.listener(move |s, _, w, cx| s.action(id, w, cx)))
     }
 
     fn menu_command(&self, id: &'static str, outlined: bool, cx: &App) -> Button {
+        let p = self.palette();
         let mut style = ButtonCustomVariant::new(cx)
-            .foreground(self.control_ink().into())
-            .hover(self.control_hover().into())
-            .active(self.control_pressed().into());
+            .foreground(p.text.into())
+            .hover(p.hover.into())
+            .active(p.pressed.into());
         if outlined {
-            style = style
-                .color(self.control_color(0xffffff, 0x243248).into())
-                .border(self.divider().into());
+            style = style.color(p.panel.into()).border(p.border_strong.into());
         }
         Button::new(id)
             .compact()
@@ -93,14 +86,15 @@ impl Dashboard {
     }
 
     fn menu_label(&self, label: impl Into<SharedString>) -> Div {
+        let p = self.palette();
         div()
             .flex()
             .items_center()
             .gap(px(6.))
             .text_size(px(13.))
-            .text_color(self.control_ink())
+            .text_color(p.text)
             .child(label.into())
-            .child(glyph("\u{E70D}", 9.))
+            .child(icon("chevron-down", 12., p.muted))
     }
     pub(super) fn selection_more(&self, cx: &Context<Self>) -> AnyElement {
         let view = cx.weak_entity();
@@ -108,8 +102,15 @@ impl Dashboard {
         let copy = self.text("Copy path", "复制路径");
         let tag = self.text("Tag", "标记");
         Button::new("selection-more")
-            .label(self.text("More ▾", "更多 ▾"))
             .compact()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(self.text("More", "更多"))
+                    .child(icon("chevron-down", 12., self.palette().muted)),
+            )
             .dropdown_menu_with_anchor(Corner::BottomRight, move |mut menu, _, _| {
                 menu = menu.action_context(focus.clone());
                 for (cmd, label) in [("copy", copy), ("tag", tag)] {
@@ -125,23 +126,23 @@ impl Dashboard {
     pub(super) fn map_nav_button(
         &self,
         id: &'static str,
-        symbol: &'static str,
+        icon_name: &'static str,
         hint: &'static str,
         enabled: bool,
         cx: &Context<Self>,
     ) -> Stateful<Div> {
+        let p = self.palette();
         let button = if enabled {
             self.command(id, false, cx)
         } else {
-            self.command_surface(id)
-                .text_color(self.control_color(0x9aa9be, 0x697b97))
+            self.command_surface(id).text_color(p.muted)
         };
         button
             .w(px(26.))
             .h(px(24.))
             .px_0()
-            .rounded(px(4.))
-            .child(glyph(symbol, 12.))
+            .rounded(px(6.))
+            .child(icon(icon_name, 14., p.text_secondary))
             .tooltip(move |w, cx| Tooltip::new(hint).build(w, cx))
     }
 
@@ -330,7 +331,7 @@ impl Dashboard {
                         .cursor_pointer()
                         .focus(|d| d.underline())
                         .text_color(self.selection_accent())
-                        .hover(|d| d.bg(rgb(if self.dark { 0x30405d } else { 0xeef3ff })))
+                        .hover(|d| d.bg(self.palette().hover))
                         .on_click(cx.listener(move |s, _, w, cx| {
                             s.navigate(id);
                             s.focus.focus(w);
@@ -353,6 +354,7 @@ impl Dashboard {
     }
 
     pub(super) fn size_selector(&self, w: &Window, cx: &Context<Self>) -> Div {
+        let p = self.palette();
         let (file_width, disk_width) = if self.zh { (84., 84.) } else { (88., 112.) };
         let (position, moving) = self.metric_position();
         if moving {
@@ -365,8 +367,10 @@ impl Dashboard {
             .items_center()
             .p(px(2.))
             .h(px(30.))
-            .rounded(px(7.))
-            .bg(self.control_color(0xe2e8f1, 0x202e42))
+            .rounded(px(8.))
+            .border_1()
+            .border_color(p.border)
+            .bg(p.seg_track)
             .child(
                 div()
                     .absolute()
@@ -374,11 +378,11 @@ impl Dashboard {
                     .left(px(2. + position * file_width))
                     .w(px(file_width + position * (disk_width - file_width)))
                     .h(px(26.))
-                    .rounded(px(5.))
+                    .rounded(px(6.))
                     .shadow_sm()
                     .border_1()
-                    .border_color(self.control_color(0xc4d2e5, 0x516a8c))
-                    .bg(self.control_color(0xffffff, 0x354c69)),
+                    .border_color(p.thumb_border)
+                    .bg(p.thumb),
             )
             .children(
                 [
@@ -403,25 +407,13 @@ impl Dashboard {
                         .cursor_pointer()
                         .w(px(width))
                         .h(px(26.))
-                        .rounded(px(5.))
+                        .rounded(px(6.))
                         .gap(px(5.))
-                        .text_color(if on {
-                            self.selection_accent()
-                        } else {
-                            self.muted()
-                        })
-                        .when(on, |d| d.font_weight(FontWeight::SEMIBOLD))
-                        .hover(|d| d.bg(rgba(0x668ac314)))
-                        .active(|d| d.bg(rgba(0x668ac330)))
-                        .focus(|d| d.border_color(self.selection_accent()))
-                        .child(glyph(
-                            if id == "logical-size" {
-                                "\u{E8A5}"
-                            } else {
-                                "\u{EDA2}"
-                            },
-                            12.,
-                        ))
+                        .text_color(if on { p.text } else { p.muted })
+                        .when(on, |d| d.font_weight(FontWeight::MEDIUM))
+                        .hover(move |d| d.bg(p.hover))
+                        .active(move |d| d.bg(p.pressed))
+                        .focus(move |d| d.border_color(p.accent))
                         .child(label)
                         .on_click(cx.listener(move |s, _, w, cx| s.action(id, w, cx)))
                 }),
@@ -430,6 +422,7 @@ impl Dashboard {
 
     pub(super) fn title_bar(&self, window: &Window) -> Div {
         let maximized = window.is_maximized();
+        let p = self.palette();
         let caption_button = |id: &'static str, area, symbol, label: &'static str| {
             div()
                 .id(id)
@@ -439,11 +432,11 @@ impl Dashboard {
                 .flex()
                 .items_center()
                 .justify_center()
-                .hover(|d| {
+                .hover(move |d| {
                     if id == "window-close" {
                         d.bg(rgb(0xc42b38)).text_color(rgb(0xffffff))
                     } else {
-                        d.bg(rgb(if self.dark { 0x33435c } else { 0xd7e1f0 }))
+                        d.bg(p.hover)
                     }
                 })
                 .child(glyph(symbol, 11.))
@@ -455,9 +448,9 @@ impl Dashboard {
             .h(px(36.))
             // Leave the top edge to the platform resize hit test in restored windows.
             .when(!maximized, |d| d.pt(px(4.)))
-            .bg(rgb(if self.dark { 0x1a263b } else { 0xeaf0f8 }))
+            .bg(p.canvas)
             .border_b_1()
-            .border_color(rgb(if self.dark { 0x34415a } else { 0xd1dbea }))
+            .border_color(p.border)
             .child(
                 div()
                     .id("title-drag")
@@ -471,8 +464,9 @@ impl Dashboard {
                     .child(img(self.brand.clone()).size(px(20.)))
                     .child(
                         div()
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_size(px(12.5))
+                            .text_color(p.text_secondary)
+                            .font_weight(FontWeight::MEDIUM)
                             .child("DiskCleaner"),
                     ),
             )
@@ -501,34 +495,39 @@ impl Dashboard {
     }
 
     pub(super) fn muted(&self) -> Rgba {
-        rgb(if self.dark { 0xa8b7ce } else { 0x50617b })
+        self.palette().muted
     }
 
     fn nav_item(
         &self,
         id: &'static str,
-        symbol: &'static str,
+        icon_name: &'static str,
         label: &'static str,
         active: bool,
         wide: bool,
         cx: &Context<Self>,
     ) -> Stateful<Div> {
+        let p = self.palette();
         div()
             .id(id)
             .focusable()
             .tab_stop(true)
-            .focus(|d| d.bg(rgb(0x3c5080)))
-            .h(px(38.))
-            .rounded_md()
+            .focus(move |d| d.bg(p.rail_hover))
+            .h(px(30.))
+            .rounded(px(6.))
             .flex()
             .items_center()
-            .when(wide, |d| d.px_3().gap_3())
+            .when(wide, |d| d.px_2().gap_2())
             .when(!wide, |d| d.justify_center())
-            .bg(rgb(if active { 0x304777 } else { 0x18253d }))
-            .text_color(rgb(if active { 0xffffff } else { 0xc4cee0 }))
-            .hover(|d| d.bg(rgb(0x35496b)))
+            .when(active, move |d| d.bg(p.rail_active))
+            .text_color(if active { p.text } else { p.rail_text })
+            .hover(move |d| d.bg(p.rail_hover))
             .cursor_pointer()
-            .child(glyph(symbol, 16.))
+            .child(icon(
+                icon_name,
+                16.,
+                if active { p.text } else { p.rail_text },
+            ))
             .when(wide, |d| d.child(label))
             .tooltip(move |w, cx| Tooltip::new(label).build(w, cx))
             .on_click(cx.listener(move |s, _, w, cx| s.action(id, w, cx)))
@@ -536,9 +535,10 @@ impl Dashboard {
 
     pub(super) fn sidebar(&self, width: f32, cx: &Context<Self>) -> Div {
         let wide = width > 60.;
+        let p = self.palette();
         let t = |en, zh| self.text(en, zh);
         let nav = |id, ic, label, on| self.nav_item(id, ic, label, on, wide, cx);
-        let rule = || div().h(px(1.)).w_full().bg(rgb(0x34415a));
+        let rule = || div().h(px(1.)).w_full().bg(p.border);
         let mut drives = div()
             .id("drive-shortcuts")
             .flex_1()
@@ -561,29 +561,22 @@ impl Dashboard {
                     .id(SharedString::from(drive.clone()))
                     .focusable()
                     .tab_stop(true)
-                    .focus(|d| d.bg(rgb(0x3c5080)))
+                    .focus(move |d| d.bg(p.rail_hover))
                     .flex_none()
-                    .h(px(32.))
+                    .h(px(30.))
                     .flex()
                     .items_center()
                     .gap_3()
                     .rounded_md()
                     .relative()
-                    .when(active, |d| {
-                        d.bg(rgb(0x293b57)).child(
-                            div()
-                                .absolute()
-                                .left_0()
-                                .top(px(7.))
-                                .bottom(px(7.))
-                                .w(px(3.))
-                                .rounded_sm()
-                                .bg(rgb(0x88afff)),
-                        )
-                    })
+                    .when(active, move |d| d.bg(p.rail_active))
                     .cursor_pointer()
-                    .hover(|d| d.bg(rgb(0x35496b)))
-                    .when(wide, |d| d.px_2().gap_1().child(glyph("\u{EDA2}", 15.)))
+                    .hover(move |d| d.bg(p.rail_hover))
+                    .when(wide, move |d| {
+                        d.px_2()
+                            .gap_1()
+                            .child(icon("hard-drive", 15., p.text_secondary))
+                    })
                     .when(wide && label.is_some(), |d| {
                         d.child(
                             div()
@@ -610,8 +603,8 @@ impl Dashboard {
             .w(px(width))
             .flex_none()
             .h_full()
-            .bg(rgb(0x18253d))
-            .text_color(rgb(0xc4cee0))
+            .bg(p.rail)
+            .text_color(p.rail_text)
             .flex()
             .flex_col()
             .px_2()
@@ -619,13 +612,13 @@ impl Dashboard {
             .gap_1()
             .child(nav(
                 "tree",
-                "\u{F12B}",
+                "dashboard",
                 t("Disk overview", "空间概览"),
                 !self.menu && self.pane == 0,
             ))
             .child(nav(
                 "files",
-                "\u{EA37}",
+                "list",
                 t("File list", "文件列表"),
                 !self.menu && self.pane == 1,
             ))
@@ -635,16 +628,16 @@ impl Dashboard {
                     div()
                         .px_3()
                         .text_xs()
-                        .text_color(rgb(0xa2b2cd))
+                        .text_color(p.rail_muted)
                         .child(t("Drives", "磁盘")),
                 )
             })
             .child(drives)
             .child(rule())
-            .child(nav("menu", "\u{E713}", t("Settings", "设置"), self.menu))
+            .child(nav("menu", "settings", t("Settings", "设置"), self.menu))
             .child(nav(
                 "about",
-                "\u{E946}",
+                "info",
                 t("About", "关于"),
                 !self.menu && self.pane == 2,
             ))
@@ -673,7 +666,7 @@ impl Dashboard {
         if !loaded {
             return div()
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_size(px(23.))
+                .text_size(px(20.))
                 .child(title);
         }
         let location = self.snapshot_location();
@@ -697,13 +690,14 @@ impl Dashboard {
         let location_label = div()
             .min_w_0()
             .truncate()
-            .font_weight(FontWeight::SEMIBOLD)
+            .font_weight(FontWeight::MEDIUM)
             .child(display_location.to_owned());
+        let p = self.palette();
         div()
             .flex()
             .flex_none()
             .min_w_0()
-            .h(px(32.))
+            .h(px(30.))
             .items_center()
             .gap_1()
             .child(if self.cancel.is_none() {
@@ -711,11 +705,9 @@ impl Dashboard {
                     .flex_shrink()
                     .min_w_0()
                     .max_w(px((width * 0.25).min(330.)))
-                    .bg(self.control_color(0xffffff, 0x243248))
-                    .border_color(self.divider())
-                    .child(glyph("\u{F12B}", 14.).text_color(self.selection_accent()))
+                    .child(icon("folder", 14., p.text_secondary))
                     .child(location_label)
-                    .child(glyph("\u{E70D}", 10.))
+                    .child(icon("chevron-down", 12., p.muted))
                     .tooltip(move |w, cx| Tooltip::new(hint.clone()).build(w, cx))
                     .into_any_element()
             } else {
@@ -745,13 +737,13 @@ impl Dashboard {
                         div()
                             .flex_none()
                             .text_xs()
-                            .text_color(self.muted())
+                            .text_color(self.palette().warn)
                             .child(t("Disk changed", "磁盘已变更")),
                     )
                 })
                 .child(
                     self.command("refresh", self.snapshot_dirty, cx)
-                        .child(glyph("\u{E72C}", 13.))
+                        .child(icon("refresh", 14., p.text_secondary))
                         .when(width >= 710., |d| d.child(t("Refresh", "刷新")))
                         .tooltip(move |w, cx| Tooltip::new(refresh_hint).build(w, cx)),
                 )
@@ -762,8 +754,8 @@ impl Dashboard {
                                 .flex()
                                 .items_center()
                                 .gap(px(6.))
-                                .text_color(self.control_ink())
-                                .child(glyph("\u{E898}", 13.))
+                                .text_color(p.text)
+                                .child(icon("upload", 14., p.text_secondary))
                                 .child(self.menu_label(t("Export", "导出"))),
                         )
                         .dropdown_menu_with_anchor(Corner::TopRight, move |mut menu, _, cx| {
@@ -912,7 +904,7 @@ impl Dashboard {
             row = row.child(
                 self.menu_command("volume-details", false, cx)
                     .child(self.menu_label(if width < 710. {
-                        t("Volume", "卷容量").to_owned()
+                        format_size(free, self.unit)
                     } else {
                         free_label.clone()
                     }))
@@ -978,19 +970,34 @@ impl Dashboard {
             .min_w_0()
             .gap_2()
             .items_center()
-            .child(div().flex_1().min_w_0().child(Input::new(&self.target)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(Input::new(&self.target).border_color(self.palette().input_border)),
+            )
             .when(loaded, |d| {
-                d.child(self.button("folder", t("Browse…", "浏览…"), false, cx))
-                    .child(self.button("import", t("Import…", "导入…"), false, cx))
+                d.child(
+                    self.button("folder", t("Browse…", "浏览…"), false, cx)
+                        .h(px(30.)),
+                )
+                .child(
+                    self.button("import", t("Import…", "导入…"), false, cx)
+                        .h(px(30.)),
+                )
             })
-            .child(self.button("scan", action, true, cx))
+            .child(self.button("scan", action, true, cx).h(px(30.)))
             .when(loaded, |d| {
-                d.child(self.button("close-location", t("Cancel", "取消"), false, cx))
+                d.child(
+                    self.button("close-location", t("Cancel", "取消"), false, cx)
+                        .h(px(30.)),
+                )
             })
     }
 
     pub(super) fn location_row(&self, cx: &Context<Self>) -> Div {
         let t = |en, zh| self.text(en, zh);
+        let p = self.palette();
         let row = self.panel().flex_none().p_2().flex().items_center().gap_2();
         if let Some(count) = self.scan_items {
             let canceling = self
@@ -999,7 +1006,7 @@ impl Dashboard {
                 .is_some_and(|c| c.load(Ordering::Relaxed));
             let path = self.target.read(cx).value();
             return row
-                .child(glyph("\u{F12B}", 15.))
+                .child(icon("folder", 15., p.muted))
                 .child(
                     div()
                         .id("scan-location")
@@ -1030,6 +1037,7 @@ impl Dashboard {
 
     pub(super) fn welcome(&self, cx: &Context<Self>) -> Div {
         let t = |en, zh| self.text(en, zh);
+        let p = self.palette();
         let busy = self.cancel.is_some();
         self.panel()
             .flex_1()
@@ -1043,13 +1051,12 @@ impl Dashboard {
             .child(
                 div()
                     .size(px(60.))
-                    .rounded_xl()
+                    .rounded(px(16.))
                     .flex()
                     .items_center()
                     .justify_center()
-                    .bg(rgb(if self.dark { 0x293c60 } else { 0xeaf0ff }))
-                    .text_color(rgb(if self.dark { 0xa6c4ff } else { 0x365db7 }))
-                    .child(glyph("\u{F12B}", 29.)),
+                    .bg(p.accent_soft)
+                    .child(icon("folder", 28., p.accent)),
             )
             .child(div().text_xl().font_weight(FontWeight::SEMIBOLD).child(
                 if self.scan_items.is_some() {
@@ -1108,6 +1115,12 @@ impl Dashboard {
                 div()
                     .text_color(self.muted())
                     .child(format!("{}  ·  Rust + GPUI", env!("CARGO_PKG_VERSION"))),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(self.muted())
+                    .child("Fonts · MiSans (Xiaomi)"),
             )
     }
 

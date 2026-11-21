@@ -42,6 +42,12 @@ pwsh -NoProfile -File tools\smoke.ps1
 
 Rust 回归用例覆盖目录统计、CSV/TSV 往返、MFT 记录与碎片化卷、取消、导出失败、重命名、重复文件及空间图面积。冒烟脚本从正式入口运行，使用 `work/sample` 和 `work/dups`，将截图和导出文件写入 `work/smoke/` 下的独立目录。每次成功后保留最近 5 次完成的测试结果，失败时保留现场。
 
+## 界面字体与图标
+
+界面中文与西文统一使用 MiSans（`MiSans VF`，小米）。字体文件按原样嵌入程序，许可协议见 `resources/fonts/MiSans-LICENSE.pdf`，归属说明见 `resources/fonts/NOTICE.md`。启动时通过 GPUI 的 `add_fonts` 注册；字体缺失时回退到系统字体。
+
+窗口内的操作图标为 `resources/icons/` 下的 SVG（Lucide 风格，1.7px 描边），由 `rust/ui/theme.rs` 注册为 GPUI 资源；路径数据来自 Lucide（ISC），许可见 `resources/icons/NOTICE.md`。文件树和文件列表仍使用 Windows Shell 提供的原始文件图标。
+
 ## 主界面与统计口径
 
 目录树以目录名显示扫描根节点，顶部位置栏显示完整扫描路径。悬停在名称上可查看该项的完整路径。每行保留 Windows 系统图标，默认显示最后修改日期和时间。导入快照和已删除的项目按类型显示系统图标，缺少修改时间的项目显示「—」。

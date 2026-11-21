@@ -26,6 +26,7 @@ pub struct Style {
     pub types: bool,
     pub names: bool,
     pub gray: bool,
+    pub dark: bool,
     pub unit: usize,
     pub free: u64,
     pub unknown: u64,
@@ -38,6 +39,7 @@ impl Default for Style {
             types: true,
             names: true,
             gray: false,
+            dark: false,
             unit: 0,
             free: 0,
             unknown: 0,
@@ -51,10 +53,80 @@ pub fn label(tree: &Tree, id: usize, zh: bool) -> String {
         _ => tree.nodes[id].display_name().to_string_lossy().into_owned(),
     }
 }
+fn rgb_to_hsl(color: u32) -> (f32, f32, f32) {
+    let r = ((color >> 16) & 255) as f32 / 255.0;
+    let g = ((color >> 8) & 255) as f32 / 255.0;
+    let b = (color & 255) as f32 / 255.0;
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let l = (max + min) / 2.0;
+    if (max - min).abs() < f32::EPSILON {
+        return (0.0, 0.0, l);
+    }
+    let d = max - min;
+    let s = if l > 0.5 {
+        d / (2.0 - max - min)
+    } else {
+        d / (max + min)
+    };
+    let h = if max == r {
+        ((g - b) / d + if g < b { 6.0 } else { 0.0 }) / 6.0
+    } else if max == g {
+        ((b - r) / d + 2.0) / 6.0
+    } else {
+        ((r - g) / d + 4.0) / 6.0
+    };
+    (h, s, l)
+}
+
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> u32 {
+    if s <= 0.0 {
+        let v = (l * 255.0).round() as u32;
+        return (v << 16) | (v << 8) | v;
+    }
+    let q = if l < 0.5 {
+        l * (1.0 + s)
+    } else {
+        l + s - l * s
+    };
+    let p = 2.0 * l - q;
+    let channel = |t: f32| {
+        let mut t = t;
+        if t < 0.0 {
+            t += 1.0;
+        }
+        if t > 1.0 {
+            t -= 1.0;
+        }
+        if t < 1.0 / 6.0 {
+            p + (q - p) * 6.0 * t
+        } else if t < 0.5 {
+            q
+        } else if t < 2.0 / 3.0 {
+            p + (q - p) * (2.0 / 3.0 - t) * 6.0
+        } else {
+            p
+        }
+    };
+    let r = (channel(h + 1.0 / 3.0) * 255.0).round() as u32;
+    let g = (channel(h) * 255.0).round() as u32;
+    let b = (channel(h - 1.0 / 3.0) * 255.0).round() as u32;
+    (r << 16) | (g << 8) | b
+}
+
+fn tuned(color: u32, lightness: f32, saturation: f32) -> u32 {
+    let (h, s, _) = rgb_to_hsl(color);
+    hsl_to_rgb(h, (s * saturation).clamp(0.0, 1.0), lightness)
+}
+
 // Keep folder headers in the branch hue, dark enough for white lettering.
-pub fn folder_band(color: u32) -> u32 {
-    let shade = |shift: u32, base: u32| (((color >> shift) & 255) + base * 2) / 3;
-    (shade(16, 28) << 16) | (shade(8, 42) << 8) | shade(0, 63)
+pub fn folder_band(color: u32, dark: bool) -> u32 {
+    let (h, s, l) = rgb_to_hsl(color);
+    if dark {
+        hsl_to_rgb(h, (s * 0.9).min(0.45), 0.20)
+    } else {
+        hsl_to_rgb(h, s, (l * 0.88).clamp(0.0, 0.74))
+    }
 }
 pub fn label_colors(color: u32) -> (u32, u32) {
     let brightness = ((color >> 16) & 255) * 299 + ((color >> 8) & 255) * 587 + (color & 255) * 114;
@@ -76,7 +148,14 @@ const COLORS: [u32; 12] = [
     0x82c4bf, 0x8eb8e8, 0xedbf80, 0xb1b5ea, 0x8fcdd6, 0xe9ae99, 0xa0cfb1, 0xd1b1d8, 0x96bdcf,
     0xe5bc9c, 0x94cdc2, 0x95afe4,
 ];
-fn color(tree: &Tree, root: usize, id: usize, by_type: bool) -> u32 {
+const COLORS_DARK: [u32; 12] = [
+    0x2f5f5b, 0x33477a, 0x6b4e28, 0x454b7a, 0x2c5a63, 0x6e463c, 0x2f5a40, 0x5a4166, 0x2e5364,
+    0x6b4c38, 0x2f5d55, 0x3a4c80,
+];
+fn color(tree: &Tree, root: usize, id: usize, by_type: bool, dark: bool) -> u32 {
+    let type_color = |value: u32| {
+        if dark { tuned(value, 0.38, 1.1) } else { value }
+    };
     let ext = Path::new(&tree.nodes[id].name)
         .extension()
         .unwrap_or_default()
@@ -85,13 +164,13 @@ fn color(tree: &Tree, root: usize, id: usize, by_type: bool) -> u32 {
     if by_type && !tree.nodes[id].dir {
         match ext.as_str() {
             "qt" | "mov" | "mpeg" | "mpg" | "mpe" | "m1s" | "mp4" | "avi" | "mts" | "vob"
-            | "wmv" | "rm" | "3gp" | "mkv" => return 0xdfb9b1,
-            "exe" | "dll" | "sys" | "ini" | "msi" | "log" => return 0xe3d2a7,
-            "zip" | "7z" | "7zip" | "rar" | "iso" => return 0xbec8e2,
+            | "wmv" | "rm" | "3gp" | "mkv" => return type_color(0xdfb9b1),
+            "exe" | "dll" | "sys" | "ini" | "msi" | "log" => return type_color(0xe3d2a7),
+            "zip" | "7z" | "7zip" | "rar" | "iso" => return type_color(0xbec8e2),
             "jpg" | "jpeg" | "gif" | "png" | "tif" | "tiff" | "nef" | "raw" | "rw2" | "cr2"
-            | "bmp" | "psd" => return 0xb3d1c5,
+            | "bmp" | "psd" => return type_color(0xb3d1c5),
             "mp2" | "mp3" | "wav" | "ogg" | "aif" | "alp" | "au" | "ac3" | "amr" | "aac"
-            | "m4a" | "wma" | "aiff" | "flac" | "voc" => return 0xcfc2dd,
+            | "m4a" | "wma" | "aiff" | "flac" | "voc" => return type_color(0xcfc2dd),
             _ => {}
         }
     }
@@ -103,7 +182,8 @@ fn color(tree: &Tree, root: usize, id: usize, by_type: bool) -> u32 {
     let hash = key
         .bytes()
         .fold(2166136261u32, |h, b| (h ^ b as u32).wrapping_mul(16777619));
-    COLORS[hash as usize % COLORS.len()]
+    let palette = if dark { &COLORS_DARK } else { &COLORS };
+    palette[hash as usize % palette.len()]
 }
 pub fn layout(tree: &Tree, root: usize, weights: &[u64], bounds: Rect, style: &Style) -> Vec<Cell> {
     layout_with_selection(tree, root, weights, bounds, style, None)
@@ -123,9 +203,14 @@ pub fn layout_with_selection(
     let total = weights[root] as f64 + style.free as f64 + style.unknown as f64;
     let width = bounds.w;
     if total > 0. {
+        let (free_color, unknown_color) = if style.dark {
+            (0x2e4a38, 0x3a3f46)
+        } else {
+            (0xb9d5ba, 0xd1d1c9)
+        };
         for (id, bytes, color) in [
-            (FREE, style.free, 0xb9d5ba),
-            (UNKNOWN, style.unknown, 0xd1d1c9),
+            (FREE, style.free, free_color),
+            (UNKNOWN, style.unknown, unknown_color),
         ] {
             if bytes > 0 {
                 let w = width * (bytes as f64 / total) as f32;
@@ -167,7 +252,7 @@ pub fn layout_with_selection(
         cells.push(Cell {
             id,
             rect,
-            color: color(tree, root, id, types),
+            color: color(tree, root, id, types, style.dark),
             weight: weights[id],
             header,
         });
@@ -291,7 +376,7 @@ pub fn png(
             }
         };
         let color = ink(c.color);
-        let band = ink(folder_band(c.color));
+        let band = ink(folder_band(c.color, style.dark));
         let band_end = (r.y + c.header).round() as u32;
         for y in (r.y.round() as u32)..((r.y + r.h).round() as u32).saturating_sub(1).min(height) {
             crate::scan::check(cancel)?;
@@ -304,7 +389,11 @@ pub fn png(
         let leaf = c.id >= UNKNOWN || !tree.nodes[c.id].dir;
         if style.names && r.fits_name() && (c.header > 0. || leaf) {
             let (primary, secondary) = label_colors(c.color);
-            let name_color = if c.header > 0. { 0xffffff } else { primary };
+            let name_color = if c.header > 0. {
+                if style.dark { 0xffffff } else { 0x14243b }
+            } else {
+                primary
+            };
             draw_label(
                 &mut img,
                 r,

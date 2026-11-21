@@ -1,5 +1,6 @@
 mod render;
 mod row_icons;
+mod theme;
 use crate::{
     Args, locations,
     map::{self, Rect},
@@ -11,12 +12,13 @@ use crate::{
 use anyhow::{Context as _, Result, anyhow, ensure};
 use gpui::{prelude::*, *};
 use gpui_component::{
-    Root, Theme, ThemeMode,
+    Root,
     input::{Input, InputEvent, InputState},
 };
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::{
+    borrow::Cow,
     cell::RefCell,
     collections::{HashMap, HashSet},
     path::PathBuf,
@@ -49,87 +51,95 @@ fn hwnd(window: &Window) -> Result<windows_sys::Win32::Foundation::HWND> {
 pub fn run(args: Args, paths: Vec<PathBuf>) -> Result<()> {
     let result = Rc::new(RefCell::new(Ok(())));
     let status = result.clone();
-    Application::new().run(move |cx| {
-        gpui_component::init(cx);
-        cx.bind_keys([
-            KeyBinding::new("f5", Refresh, None),
-            KeyBinding::new("alt-up", GoUp, None),
-            KeyBinding::new("alt-left", Back, None),
-            KeyBinding::new("alt-right", Forward, None),
-            KeyBinding::new("ctrl-home", Home, None),
-            KeyBinding::new("ctrl-shift-c", CopyInfo, None),
-            KeyBinding::new("f3", PickFolder, None),
-            KeyBinding::new("ctrl-e", SaveCsv, None),
-            KeyBinding::new("ctrl-s", SaveMap, None),
-            KeyBinding::new("ctrl-shift-f", ShowFilter, None),
-            KeyBinding::new("delete", Trash, Some("Snapshot")),
-        ]);
-        let (width, height) = args
-            .geometry
-            .as_deref()
-            .and_then(|s| s.split_once('x'))
-            .and_then(|(w, h)| Some((w.parse::<f32>().ok()?, h.parse::<f32>().ok()?)))
-            .unwrap_or((1210., 795.));
-        let bounds = Bounds::centered(None, size(px(width.max(600.)), px(height.max(420.))), cx);
-        let mut initial = WindowBounds::Windowed(bounds);
-        if args.geometry.is_none()
-            && args.shot.is_none()
-            && let Ok(p) = platform::settings()
-            && let Ok(spec) = p.get_value::<String, _>("windowBounds")
-        {
-            let values = spec
-                .split(',')
-                .map(str::parse::<i32>)
-                .collect::<Result<Vec<_>, _>>();
-            if let Ok(v) = values
-                && let [x, y, width, height, maximized] = v.as_slice()
-                && *width >= 600
-                && *height >= 420
+    Application::new()
+        .with_assets(theme::Assets)
+        .run(move |cx| {
+            cx.text_system()
+                .add_fonts(vec![Cow::Borrowed(
+                    &include_bytes!("../resources/fonts/MiSansVF.ttf")[..],
+                )])
+                .ok();
+            gpui_component::init(cx);
+            cx.bind_keys([
+                KeyBinding::new("f5", Refresh, None),
+                KeyBinding::new("alt-up", GoUp, None),
+                KeyBinding::new("alt-left", Back, None),
+                KeyBinding::new("alt-right", Forward, None),
+                KeyBinding::new("ctrl-home", Home, None),
+                KeyBinding::new("ctrl-shift-c", CopyInfo, None),
+                KeyBinding::new("f3", PickFolder, None),
+                KeyBinding::new("ctrl-e", SaveCsv, None),
+                KeyBinding::new("ctrl-s", SaveMap, None),
+                KeyBinding::new("ctrl-shift-f", ShowFilter, None),
+                KeyBinding::new("delete", Trash, Some("Snapshot")),
+            ]);
+            let (width, height) = args
+                .geometry
+                .as_deref()
+                .and_then(|s| s.split_once('x'))
+                .and_then(|(w, h)| Some((w.parse::<f32>().ok()?, h.parse::<f32>().ok()?)))
+                .unwrap_or((1210., 795.));
+            let bounds =
+                Bounds::centered(None, size(px(width.max(600.)), px(height.max(420.))), cx);
+            let mut initial = WindowBounds::Windowed(bounds);
+            if args.geometry.is_none()
+                && args.shot.is_none()
+                && let Ok(p) = platform::settings()
+                && let Ok(spec) = p.get_value::<String, _>("windowBounds")
             {
-                let saved = Bounds::new(
-                    point(px(*x as f32), px(*y as f32)),
-                    size(px(*width as f32), px(*height as f32)),
-                );
-                if cx
-                    .displays()
-                    .iter()
-                    .any(|d| d.bounds().contains(&saved.origin))
+                let values = spec
+                    .split(',')
+                    .map(str::parse::<i32>)
+                    .collect::<Result<Vec<_>, _>>();
+                if let Ok(v) = values
+                    && let [x, y, width, height, maximized] = v.as_slice()
+                    && *width >= 600
+                    && *height >= 420
                 {
-                    initial = if *maximized != 0 {
-                        WindowBounds::Maximized(saved)
-                    } else {
-                        WindowBounds::Windowed(saved)
-                    };
+                    let saved = Bounds::new(
+                        point(px(*x as f32), px(*y as f32)),
+                        size(px(*width as f32), px(*height as f32)),
+                    );
+                    if cx
+                        .displays()
+                        .iter()
+                        .any(|d| d.bounds().contains(&saved.origin))
+                    {
+                        initial = if *maximized != 0 {
+                            WindowBounds::Maximized(saved)
+                        } else {
+                            WindowBounds::Windowed(saved)
+                        };
+                    }
                 }
             }
-        }
-        let outcome = cx.open_window(
-            WindowOptions {
-                window_bounds: Some(initial),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("DiskCleaner".into()),
-                    appears_transparent: true,
+            let outcome = cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(initial),
+                    titlebar: Some(TitlebarOptions {
+                        title: Some("DiskCleaner".into()),
+                        appears_transparent: true,
+                        ..Default::default()
+                    }),
                     ..Default::default()
-                }),
-                ..Default::default()
-            },
-            |window, cx| {
-                let view = cx.new(|cx| Dashboard::new(args, paths, status.clone(), window, cx));
-                cx.new(|cx| Root::new(view, window, cx))
-            },
-        );
-        if let Err(e) = outcome {
-            *status.borrow_mut() = Err(e.to_string());
-            cx.quit();
-        }
-        cx.on_window_closed(|cx| {
-            if cx.windows().is_empty() {
-                cx.quit()
+                },
+                |window, cx| {
+                    let view = cx.new(|cx| Dashboard::new(args, paths, status.clone(), window, cx));
+                    cx.new(|cx| Root::new(view, window, cx))
+                },
+            );
+            if let Err(e) = outcome {
+                *status.borrow_mut() = Err(e.to_string());
+                cx.quit();
             }
-        })
-        .detach();
-        cx.activate(true);
-    });
+            cx.on_window_closed(|cx| {
+                if cx.windows().is_empty() {
+                    cx.quit()
+                }
+            })
+            .detach();
+            cx.activate(true);
+        });
     let outcome = result.replace(Ok(()));
     outcome.map_err(anyhow::Error::msg)
 }
@@ -287,6 +297,9 @@ impl Drop for Dashboard {
     }
 }
 impl Dashboard {
+    fn palette(&self) -> theme::Palette {
+        theme::of(self.dark)
+    }
     fn text(&self, en: &'static str, zh: &'static str) -> &'static str {
         if self.zh { zh } else { en }
     }
@@ -334,15 +347,7 @@ impl Dashboard {
                     w.appearance(),
                     WindowAppearance::Dark | WindowAppearance::VibrantDark
                 ));
-        Theme::change(
-            if dark {
-                ThemeMode::Dark
-            } else {
-                ThemeMode::Light
-            },
-            Some(w),
-            cx,
-        );
+        theme::apply(dark, Some(w), cx);
         let target_text = if paths.is_empty() {
             platform::drives().into_iter().next().unwrap_or_default()
         } else {
@@ -575,15 +580,7 @@ impl Dashboard {
                     w.appearance(),
                     WindowAppearance::Dark | WindowAppearance::VibrantDark
                 );
-                Theme::change(
-                    if s.dark {
-                        ThemeMode::Dark
-                    } else {
-                        ThemeMode::Light
-                    },
-                    Some(w),
-                    cx,
-                );
+                theme::apply(s.dark, Some(w), cx);
                 cx.notify();
             }
         })
@@ -1521,6 +1518,7 @@ impl Dashboard {
             types: self.by_type,
             names: self.labels,
             gray: self.gray,
+            dark: self.dark,
             unit: self.unit,
             ..Default::default()
         };
@@ -2207,15 +2205,7 @@ impl Dashboard {
                                 w.appearance(),
                                 WindowAppearance::Dark | WindowAppearance::VibrantDark
                             ));
-                    Theme::change(
-                        if self.dark {
-                            ThemeMode::Dark
-                        } else {
-                            ThemeMode::Light
-                        },
-                        Some(w),
-                        cx,
-                    );
+                    theme::apply(self.dark, Some(w), cx);
                     platform::settings()?.set_value("Theme", &mode)?
                 }
                 "shell-on" | "shell-off" => {
